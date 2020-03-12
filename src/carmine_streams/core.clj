@@ -3,11 +3,30 @@
             [clojure.tools.logging :as log]
             [clojure.string :as string]))
 
+(defn stream-name [s]
+  (str "stream/" s))
+
+(defn group-name [s]
+  (str "group/" s))
+
+(defn consumer-name
+  ([s] (str "consumer/" s))
+  ([s i] (str "consumer/" s "/" i)))
+
 (defn kvs->map [kvs]
   (reduce (fn [m [k v]]
             (assoc m (keyword k) v))
           {}
           (partition-all 2 kvs)))
+
+
+;; todo
+(defn all-stream-keys [conn-opts])
+
+(defn group-names [conn-opts stream])
+
+(defn rebalance-consumers! [conn-opts])
+;; end todo
 
 (defn create-consumer-group!
   "An idempotent function that creates a consumer group for the stream"
@@ -23,7 +42,7 @@
 
 (defn start-consumer!
   "Start consuming messages from the consumer group.
-   Reads pending messages first before processing new ones.
+   On startup reads pending messages first before processing new ones.
    Blocks indefinitely waiting for new messages.
    Calls f on each message (which presumably has side effects)."
   [conn-opts stream group f consumer-name]
