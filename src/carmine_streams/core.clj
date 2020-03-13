@@ -19,9 +19,14 @@
           {}
           (partition-all 2 kvs)))
 
-
-;; todo
-(defn all-stream-keys [conn-opts])
+(defn all-stream-keys
+  ([conn-opts] (all-stream-keys conn-opts (stream-name "*")))
+  ([conn-opts key-pattern]
+   (as-> (car/wcar conn-opts (car/keys key-pattern)) ks
+     (zipmap ks (car/wcar conn-opts :as-pipeline (mapv car/type ks)))
+     (filter #(= "stream" (val %)) ks)
+     (keys ks)
+     (set ks))))
 
 (defn group-names [conn-opts stream])
 
