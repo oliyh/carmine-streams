@@ -188,6 +188,8 @@ Get the next smallest message id (useful for iterating through ranges as per `xr
 
 Start a normal REPL. You will need redis-server v5+ running on the default port to run the tests.
 
+[![CircleCI](https://circleci.com/gh/oliyh/carmine-streams.svg?style=svg)](https://circleci.com/gh/oliyh/carmine-streams)
+
 ## License
 
 Copyright © 2020 oliyh
