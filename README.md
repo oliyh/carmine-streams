@@ -99,6 +99,65 @@ View stats for a consumer group:
  :unconsumed 0}
 ```
 
+Garbage collect consumer groups to reallocate pending messages from dead consumers to live ones
+and send undeliverable messages to a Dead Letter Queue (DLQ).
+
+When a message is not acknowledged by the consumer (i.e. your consumer died halfway through,
+or the callback threw an exception) it remains pending and its idle time is how long it has been
+since it was first read.
+
+The two possibilities are handled differently:
+
+- If your consumer died and remains dead
+  - The delivery count will remain at 1 and the idle time will increase
+  - When the idle time has increased enough that it's obvious the consumer can't still be processing it
+    we want to send it to another consumer that is alive - this is called rebalancing
+  - The `:rebalance` option specifies
+    - The `:idle` time necessary for a consumer/message to be considered dead before its messages are sent to another consumer
+    - The `:siblings` option, when `:active` will apply the same test of idleness to sibling workers before claiming messages for them
+    - The `:distribution` option decides how to distribute work to the siblings, the choices are:
+      - `:random` random
+      - `:lra` least-recently-active (with the highest idle time)
+      - `:mra` most-recently-active (with the lowest idle time)
+- If the message was bad and the worker throws an exception trying to process it
+  - It will remain in the backlog which the worker will attempt to process during quiet times
+  - The delivery count will increase on each attempt
+  - When it reaches a particular value we will decide it cannot be processed and send it to a DLQ for later inspection
+  - The `:dlq` option specifies
+    - The number of `:deliveries` required before the message is considered unprocessable
+    - The name of the `:stream` to write the message metadata to
+
+
+```clj
+(cs/gc-consumer-group! conn-opts stream group {:rebalance {:idle 60000
+                                                           :siblings :active
+                                                           :distribution :random}
+                                               :dlq {:deliveries 5
+                                                     :stream "dlq"}})
+```
+
+GC behaviour is as follows:
+
+- Checks the pending messages for every consumer in the group
+- Any message exceeding the threshold for the DLQ is sent to the DLQ
+- Any remaining messages exceeding the threshold for rebalancing is rebalanced to other consumers based on the options
+- Any remaining messages remain pending for their original consumer
+
+Note that both `rebalance` and `dlq` criteria can specify `:idle` and `:deliveries` and that a message said to be exceeding the
+criteria must have values exceeding one OR the other of the thresholds. By not specifying the threshold the criteria will not be compared.
+
+You should run this function periodically, choosing values which trade off the following characteristics:
+- What the maximum latency for a single message should be before it either fails or succeeds
+- How many times you should attempt to rebalance a message before considering that it is killing consumers or is unprocessable
+
+### Utilities
+
+Get the next smallest message id (useful for iterating through ranges as per `xrange` or `xpending`:
+
+```clj
+(cs/next-id "0-1") ;; -> 0-2
+```
+
 ## License
 
 Copyright © 2020 oliyh

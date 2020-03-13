@@ -1,5 +1,5 @@
 (ns carmine-streams.core-test
-  (:require [clojure.test :refer [deftest testing is use-fixtures]]
+  (:require [clojure.test :refer [deftest testing is are use-fixtures]]
             [carmine-streams.core :as cs]
             [taoensso.carmine :as car]
             [clojure.string :as string]))
@@ -20,6 +20,14 @@
 
   (is (= {:a 1 :b 2 :c 3}
          (cs/kvs->map ["a" 1 "c" 3 "b" 2]))))
+
+(deftest next-id-test
+  (are [from expected] (= expected (cs/next-id from))
+    "0-0" "0-1" ;; smallest id redis supports
+    "123-234" "123-235"
+    "123" "123-1"
+    ;; biggest id redis supports
+    "18446744073709551615-18446744073709551614" "18446744073709551615-18446744073709551615"))
 
 (deftest all-stream-names-test
   (testing "empty at first"
@@ -174,3 +182,129 @@
                   :last-delivered-id "0-1"
                   :unconsumed 0}
                  (dissoc (cs/group-stats conn-opts stream group) :consumers))))))))
+
+(deftest gc-consumer-group-test
+
+  (testing "bad messages get moved to the dlq"
+    (let [stream (cs/stream-name "bad-messages")
+          group (cs/group-name "bad-messages")
+          consumer (cs/consumer-name "bad-messages" 0)
+          failed? (promise)
+          callback (fn [v]
+                     (deliver failed? true)
+                     (throw (Exception. "Bad message")))]
+
+      (is (cs/create-consumer-group! conn-opts stream group))
+
+      (future (cs/start-consumer! conn-opts stream group consumer callback))
+
+      (car/wcar conn-opts (car/xadd stream "0-1" :foo "bar"))
+      (is (true? (deref failed? 500 ::timed-out)))
+
+      (testing "message is now pending"
+        (is (= {:name group
+                :pending 1
+                :last-delivered-id "0-1"
+                :unconsumed 0}
+               (dissoc (cs/group-stats conn-opts stream group) :consumers))))
+
+      (testing "a gc moves it to the dlq"
+        (cs/gc-consumer-group! conn-opts stream group {:dlq {:deliveries 1
+                                                             :stream "dlq"}})
+
+        (is (= {:name group
+                :pending 0
+                :last-delivered-id "0-1"
+                :unconsumed 0}
+               (dissoc (cs/group-stats conn-opts stream group) :consumers)))
+
+        (let [[message] (car/wcar conn-opts (car/xread :count 1 :streams "dlq" "0-0"))
+              [_stream-name [[_message-id kvs]]] message]
+          (is (= {:stream stream
+                  :group group
+                  :consumer consumer
+                  :id "0-1"}
+                 (dissoc (cs/kvs->map kvs) :idle :deliveries)))))))
+
+  (testing "dead consumer messages are rebalanced to other consumers"
+    (let [stream (cs/stream-name "dead-consumers")
+          group (cs/group-name "dead-consumers")
+          alive-consumer (cs/consumer-name "dead-consumers" "alive")
+          dead-consumer (cs/consumer-name "dead-consumers" "dead")
+          processed-messages (atom #{})
+          failed-messages (atom #{})
+          failed? (promise)
+          succeeded? (promise)]
+
+      (is (cs/create-consumer-group! conn-opts stream group))
+
+      (future (cs/start-consumer! conn-opts stream group dead-consumer
+                                  (fn [v]
+                                    (when (= 10 (count (swap! failed-messages conj v)))
+                                      (deliver failed? true))
+                                    (throw (Exception. "I'm going to die")))))
+
+      (dotimes [i 10]
+        (car/wcar conn-opts (car/xadd stream "*" :counter i)))
+
+      (is (true? (deref failed? 500 ::timed-out)))
+      (cs/stop-consumers! conn-opts dead-consumer)
+
+      (future (cs/start-consumer! conn-opts stream group alive-consumer
+                                  (fn [v]
+                                    (when (= 10 (count (swap! processed-messages conj v)))
+                                      (deliver succeeded? true)))
+                                  {:block 100}))
+
+      (Thread/sleep 100)
+
+      (testing "all messages are now pending for dead consumer"
+        (let [consumers-pending (->> (cs/group-stats conn-opts stream group)
+                                     :consumers
+                                     (reduce (fn [acc {:keys [name pending]}]
+                                               (assoc acc name pending))
+                                             {}))]
+
+          (is (= {dead-consumer 10
+                  alive-consumer 0}
+                 consumers-pending))))
+
+      (testing "a gc is a no-op when the criteria aren't met"
+        (cs/gc-consumer-group! conn-opts stream group {:rebalance {:idle 99999999
+                                                                   :siblings :active
+                                                                   :distribution :random}})
+
+        (let [consumers-pending (->> (cs/group-stats conn-opts stream group)
+                                     :consumers
+                                     (reduce (fn [acc {:keys [name pending]}]
+                                               (assoc acc name pending))
+                                             {}))]
+
+          (is (= {dead-consumer 10
+                  alive-consumer 0}
+                 consumers-pending))))
+
+      (testing "a gc moves it to another consumer"
+        (cs/gc-consumer-group! conn-opts stream group {:rebalance {:idle 0
+                                                                   :siblings :active
+                                                                   :distribution :random}})
+
+        (is (true? (deref succeeded? 500 ::timed-out)))
+
+        (let [consumers-pending (->> (cs/group-stats conn-opts stream group)
+                                     :consumers
+                                     (reduce (fn [acc {:keys [name pending]}]
+                                               (assoc acc name pending))
+                                             {}))]
+
+          (is (= {dead-consumer 0
+                  alive-consumer 0}
+                 consumers-pending)))
+
+        (is (= 10 (count @processed-messages)))))))
+
+(cs/gc-consumer-group! conn-opts stream group {:rebalance {:idle 99999999
+                                                           :siblings :active
+                                                           :distribution :random}
+                                               :dlq {:deliveries 1
+                                                     :stream "dlq"}})

@@ -19,6 +19,14 @@
           {}
           (partition-all 2 kvs)))
 
+(defn next-id
+  "Given a redis message id returns the next smallest possible id"
+  [id]
+  (let [[timestamp sequence-number] (string/split id #"-")]
+    (str timestamp "-" (inc (if sequence-number
+                              (bigint sequence-number)
+                              0)))))
+
 (defn all-stream-keys
   ([conn-opts] (all-stream-keys conn-opts (stream-name "*")))
   ([conn-opts key-pattern]
@@ -33,9 +41,6 @@
        (map kvs->map)
        (map :name)
        set))
-
-(defn rebalance-consumers! [conn-opts])
-;; end todo
 
 (defn create-consumer-group!
   "An idempotent function that creates a consumer group for the stream"
@@ -169,17 +174,16 @@
                            (remove #(and (pos? (:pending %))
                                          (< (:idle rebalance) (:idle %)))
                                    all-consumers)
-                           all-consumers)
-        active-consumers ]
+                           all-consumers)]
     (if (empty? active-consumers)
       (log/warn logging-context "No active consumers found" all-consumers)
 
-      (doseq [consumer [all-consumers]
-              :let [logging-context (assoc logging-context :consumer consumer)]]
+      (doseq [consumer-name (map :name all-consumers)
+              :let [logging-context (assoc logging-context :consumer consumer-name)]]
         (loop [last-id "-"]
           (let [pending-messages (car/wcar
                                   conn-opts
-                                  (car/xpending stream group last-id "+" 100 consumer))]
+                                  (car/xpending stream group last-id "+" 100 consumer-name))]
             (when (seq pending-messages)
               (car/wcar conn-opts
                         (doseq [[message-id _consumer idle deliveries :as message] pending-messages]
@@ -187,7 +191,7 @@
                             (and dlq (message-exceeds? dlq message))
                             (do (log/info logging-context "Sending message" message-id "to" (:stream dlq) message)
                                 (car/xack stream group message-id)
-                                (car/xadd (:stream dlq) "*" "stream" stream "group" group "consumer" consumer "id" message-id "idle" idle "deliveries" deliveries))
+                                (car/xadd (:stream dlq) "*" "stream" stream "group" group "consumer" consumer-name "id" message-id "idle" idle "deliveries" deliveries))
 
                             (and rebalance (message-exceeds? rebalance message))
                             (let [next-consumer (as-> active-consumers %
@@ -197,11 +201,11 @@
                                                     (shuffle %))
                                                   (map :name %)
                                                   (set %)
-                                                  (disj % consumer)
+                                                  (disj % consumer-name)
                                                   (first %))]
                               (log/info logging-context "Claiming message" message-id "for" next-consumer message)
                               (car/xclaim stream group next-consumer idle message-id))
 
                             :else
                             :noop)))
-              (recur (first (last pending-messages))))))))))
+              (recur (next-id (first (last pending-messages)))))))))))
