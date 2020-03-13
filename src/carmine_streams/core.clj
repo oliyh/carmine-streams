@@ -147,3 +147,61 @@
                             count
                             dec
                             (max 0)))))
+
+(defn message-exceeds? [thresholds [_ _ idle deliveries]]
+  (or (and (:idle thresholds)
+           (<= (:idle thresholds) idle))
+      (and (:deliveries thresholds)
+           (<= (:deliveries thresholds) deliveries))))
+
+(defn gc-consumer-group! [conn-opts stream group & [{:keys [rebalance
+                                                            dlq]
+                                                     :or {rebalance {:siblings :active
+                                                                     :distribution :random
+                                                                     :idle (* 60 1000)}
+                                                          dlq {:stream (stream-name "dlq")
+                                                               :deliveries 10}}
+                                                     :as opts}]]
+  (let [logging-context {:stream stream
+                         :group group}
+        all-consumers (:consumers (group-stats conn-opts stream group))
+        active-consumers (if (= :active (:siblings rebalance))
+                           (remove #(and (pos? (:pending %))
+                                         (< (:idle rebalance) (:idle %)))
+                                   all-consumers)
+                           all-consumers)
+        active-consumers ]
+    (if (empty? active-consumers)
+      (log/warn logging-context "No active consumers found" all-consumers)
+
+      (doseq [consumer [all-consumers]
+              :let [logging-context (assoc logging-context :consumer consumer)]]
+        (loop [last-id "-"]
+          (let [pending-messages (car/wcar
+                                  conn-opts
+                                  (car/xpending stream group last-id "+" 100 consumer))]
+            (when (seq pending-messages)
+              (car/wcar conn-opts
+                        (doseq [[message-id _consumer idle deliveries :as message] pending-messages]
+                          (cond
+                            (and dlq (message-exceeds? dlq message))
+                            (do (log/info logging-context "Sending message" message-id "to" (:stream dlq) message)
+                                (car/xack stream group message-id)
+                                (car/xadd (:stream dlq) "*" "stream" stream "group" group "consumer" consumer "id" message-id "idle" idle "deliveries" deliveries))
+
+                            (and rebalance (message-exceeds? rebalance message))
+                            (let [next-consumer (as-> active-consumers %
+                                                  (condp = (:distribution rebalance)
+                                                    :activity (sort-by :idle %)
+                                                    :inactivity (sort-by :idle > %)
+                                                    (shuffle %))
+                                                  (map :name %)
+                                                  (set %)
+                                                  (disj % consumer)
+                                                  (first %))]
+                              (log/info logging-context "Claiming message" message-id "for" next-consumer message)
+                              (car/xclaim stream group next-consumer idle message-id))
+
+                            :else
+                            :noop)))
+              (recur (first (last pending-messages))))))))))
