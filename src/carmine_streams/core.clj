@@ -150,7 +150,7 @@
          consumer-clients (->> (string/split-lines all-clients)
                                (filter #(re-find (re-pattern consumer-name-pattern) %))
                                (map #(subs (re-find #"id=\d*\b" %) 3)))]
-     (car/wcar conn-opts (mapv #(car/client-unblock % :error) consumer-clients ))))
+     (car/wcar conn-opts (mapv #(car/client-unblock % :error) consumer-clients))))
   ([conn-opts stream group]
    (let [consumer-names (->> (group-stats conn-opts stream group)
                              :consumers

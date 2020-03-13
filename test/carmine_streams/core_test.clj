@@ -138,8 +138,9 @@
     (testing "can stop explicit consumer"
       (let [consumer (future (cs/start-consumer! conn-opts stream group (cs/consumer-name "consumer" 0) identity))
             another-consumer (future (cs/start-consumer! conn-opts stream group (cs/consumer-name "consumer" 1) identity))]
+        (Thread/sleep 100)
         (cs/stop-consumers! conn-opts (cs/consumer-name "consumer" 0))
-        (is (nil? (deref consumer 200 ::timed-out)))
+        (is (nil? (deref consumer 100 ::timed-out)))
         (is (= ::timed-out (deref another-consumer 100 ::timed-out)))
 
         (testing "can stop consumers for a stream/group"
