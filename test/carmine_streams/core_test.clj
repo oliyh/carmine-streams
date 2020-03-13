@@ -60,8 +60,13 @@
 (deftest create-start-and-shutdown-test
   (let [stream (cs/stream-name "my-stream")
         group (cs/group-name "my-group")
-        consumer-name-prefix "my-consumer"
-        consumed-messages (atom #{})]
+        consumer-prefix "my-consumer"
+        consumed-messages (atom #{})
+        callback (fn [v]
+                   (let [data (update v :temperature read-string)]
+                     (if (neg? (:temperature data))
+                       (throw (Exception. "Too cold!"))
+                       (swap! consumed-messages conj data))))]
 
     (testing "can create stream and consumer group"
       (is (cs/create-consumer-group! conn-opts stream group))
@@ -74,13 +79,11 @@
              (cs/group-stats conn-opts stream group))))
 
     (testing "can create consumers"
-      (let [consumers (mapv #(future (cs/start-consumer! conn-opts stream group
-                                                         (fn [v]
-                                                           (let [data (update v :temperature read-string)]
-                                                             (if (neg? (:temperature data))
-                                                               (throw (Exception. "Too cold!"))
-                                                               (swap! consumed-messages conj data))))
-                                                         (cs/consumer-name consumer-name-prefix %)))
+      (let [consumers (mapv #(future (cs/start-consumer! conn-opts
+                                                         stream
+                                                         group
+                                                         (cs/consumer-name consumer-prefix %)
+                                                         callback))
                             (range 3))]
         (Thread/sleep 100) ;; wait for futures to start
 
@@ -116,7 +119,7 @@
                    (dissoc group-stats :consumers)))))
 
         (testing "can stop consumers"
-          (cs/stop-consumers! conn-opts (cs/consumer-name consumer-name-prefix))
+          (cs/stop-consumers! conn-opts (cs/consumer-name consumer-prefix))
           (is (every? #(nil? (deref % 100 ::timed-out)) consumers)))))))
 
 (deftest stop-consumers-test
@@ -144,8 +147,11 @@
 
     (is (cs/create-consumer-group! conn-opts stream group))
 
-    (let [consumer (future (cs/start-consumer! conn-opts stream group callback
+    (let [consumer (future (cs/start-consumer! conn-opts
+                                               stream
+                                               group
                                                (cs/consumer-name consumer-prefix 1)
+                                               callback
                                                {:block 100}))]
 
       (testing "wait for first message to fail"

@@ -50,13 +50,23 @@
             (throw t))))))
 
 (defn start-consumer!
-  "Start consuming messages from the consumer group.
-   On startup reads pending messages first before processing new ones.
-   Blocks for `block` ms waiting for new messages. If none are delivered in this time
-   will check for and process pending messages, which will be present either as a result
-   of an earlier failed callback or having been rebalanced from a dead sibling.
-   Calls f on each message (which presumably has side effects)."
-  [conn-opts stream group f consumer-name & [{:keys [block]
+  "Consumer behaviour is as follows:
+
+ - Calls the callback for every message received, with the message
+   coerced into a keywordized map, and acks the message.
+   If the callback throws an exception the message will not be acked
+ - Processes all pending messages on startup before processing new ones
+ - Processes new messages until either:
+   - The consumer is stopped (see `stop-consumers!`)
+   - There are no messages delivered during the time it was blocked waiting
+     for a new message, upon which it will check for pending messages and
+     begin processing the backlog if any are found, returning to wait for
+     new messages when the backlog is cleared
+
+ Options to the consumer consist of:
+
+ - `:block` ms to block waiting for a new message before checking the backlog"
+  [conn-opts stream group consumer-name f & [{:keys [block]
                                               :or {block 5000}
                                               :as opts}]]
   (let [logging-context {:stream stream
