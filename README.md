@@ -6,10 +6,17 @@ Redis does a brilliant job of being fast with loads of features and Carmine does
 in Clojure. Working with Redis' streams API requires quite a lot of interaction to produce desirable high-level behaviour, and that is what this
 library provides.
 
-carmine-streams allows you to create streams and consumer groups, consume streams reliably, deal with failed consumers and unprocessable messages
+**carmine-streams** allows you to create streams and consumer groups, consume streams reliably, deal with failed consumers and unprocessable messages
 and gain visibility on the state of it all with a few simple functions.
 
+[![Clojars Project](https://img.shields.io/clojars/v/carmine-streams.svg)](https://clojars.org/carmine-streams)
+
 ## Usage
+
+- [Creating consumer groups and consumers](#creating-consumer-groups-and-consumers)
+- [Visibility](#visibility)
+- [Recovering from failures](#recovering-from-failures)
+- [Utilities](#utilities)
 
 ### Creating consumer groups and consumers
 
@@ -176,6 +183,10 @@ Get the next smallest message id (useful for iterating through ranges as per `xr
 ```clj
 (cs/next-id "0-1") ;; -> 0-2
 ```
+
+## Development
+
+Start a normal REPL. You will need redis-server v5+ running on the default port to run the tests.
 
 ## License
 
