@@ -41,6 +41,19 @@
       (is (= #{"explicit-stream-key"}
              (cs/all-stream-keys conn-opts "explicit-*"))))))
 
+(deftest group-names-test
+  (let [conn-opts {}
+        stream (cs/stream-name "my-stream")]
+    (testing "exception bubbles if stream doesn't exist"
+      (is (thrown? Exception (cs/group-names conn-opts "non-existent-stream"))))
+
+    (testing "shows all group names"
+      (cs/create-consumer-group! conn-opts stream (cs/group-name "foo"))
+      (is (= #{"group/foo"} (cs/group-names conn-opts stream)))
+
+      (cs/create-consumer-group! conn-opts stream (cs/group-name "bar"))
+      (is (= #{"group/foo" "group/bar"} (cs/group-names conn-opts stream))))))
+
 (deftest create-idempotency-test
   (dotimes [_ 3]
     (is (cs/create-consumer-group! conn-opts "foo" "bar"))))

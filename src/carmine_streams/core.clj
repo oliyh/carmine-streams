@@ -28,7 +28,11 @@
      (keys ks)
      (set ks))))
 
-(defn group-names [conn-opts stream])
+(defn group-names [conn-opts stream]
+  (->> (car/wcar conn-opts (car/xinfo :groups stream))
+       (map kvs->map)
+       (map :name)
+       set))
 
 (defn rebalance-consumers! [conn-opts])
 ;; end todo
