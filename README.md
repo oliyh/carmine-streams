@@ -1,14 +1,23 @@
 # carmine-streams
 
-Utility functions for working with Redis streams in [carmine](https://github.com/ptaoussanis/carmine).
+Utility functions for working with [Redis streams](https://redis.io/topics/streams-intro) in [carmine](https://github.com/ptaoussanis/carmine).
+
+Redis does a brilliant job of being fast with loads of features and Carmine does a brilliant job of exposing all the low-level Redis commands
+in Clojure. Working with Redis' streams API requires quite a lot of interaction to produce desirable high-level behaviour, and that is what this
+library provides.
+
+carmine-streams allows you to create streams and consumer groups, consume streams reliably, deal with failed consumers and unprocessable messages
+and gain visibility on the state of it all with a few simple functions.
 
 ## Usage
 
 ### Creating consumer groups and consumers
 
+#### Naming things
+
 Consistent naming conventions for streams, groups and consumers:
 
-```
+```clj
 (require '[carmine-streams.core :as cs])
 (def conn-opts {})
 
@@ -17,13 +26,17 @@ Consistent naming conventions for streams, groups and consumers:
 (def consumer (cs/consumer-name "persist-readings" 0)) ;; -> consumer/persist-readings/0
 ```
 
-Create a consumer group:
+#### Consumer group creation
+
+Idempotent consumer group creation:
 
 ```clj
 (cs/create-consumer-group! conn-opts stream group)
 ```
 
-Create consumers:
+#### Consumer creation
+
+Start an infinite loop that consumes from the group:
 
 ```clj
 (def opts {:block 5000})
@@ -54,7 +67,9 @@ Consumer behaviour is as follows:
 
  - `:block` ms to block waiting for a new message before checking the backlog
 
-Stop consumers:
+#### Stop consumers
+
+Send an unblock message to blocked consumers letting them exit gracefully:
 
 ```clj
 ;; stop all consumers matching consumer/*
@@ -69,7 +84,7 @@ Stop consumers:
 
 ### Visibility
 
-Find all stream keys:
+#### All stream keys
 
 ```clj
 ;; all stream keys matching stream/*
@@ -79,13 +94,13 @@ Find all stream keys:
 (cs/all-stream-keys conn-opts "persist-*")
 ```
 
-Find all group names for a stream:
+#### All group names for a stream
 
 ```clj
 (cs/group-names conn-opts stream) ;; -> #{"group/persist-readings"}
 ```
 
-View stats for a consumer group:
+#### Stats for a consumer group
 
 ```clj
 (cs/group-stats conn-opts stream group)
@@ -98,6 +113,8 @@ View stats for a consumer group:
  :last-delivered-id "0-2",
  :unconsumed 0}
 ```
+
+### Recovering from failures
 
 Garbage collect consumer groups to reallocate pending messages from dead consumers to live ones
 and send undeliverable messages to a Dead Letter Queue (DLQ).
@@ -151,6 +168,8 @@ You should run this function periodically, choosing values which trade off the f
 - How many times you should attempt to rebalance a message before considering that it is killing consumers or is unprocessable
 
 ### Utilities
+
+#### Message ids
 
 Get the next smallest message id (useful for iterating through ranges as per `xrange` or `xpending`:
 

@@ -116,23 +116,12 @@
                   (recur (when last-id id)))
 
               :else ;; unblocked naturally, this is a quiet time to check for pending messages
-              (if-let [id (->> (car/xpending stream group "-" "+" 1 consumer-name)
-                               (car/wcar conn-opts)
-                               ffirst)]
+              (if (->> (car/xpending stream group "-" "+" 1 consumer-name)
+                       (car/wcar conn-opts)
+                       ffirst)
                 (do (log/info logging-context "Processing pending messages")
                     (recur "0-0"))
                 (recur nil)))))))))
-
-(defn stop-consumers!
-  "Stop all the consumers for the consumer group by sending an UNBLOCK message"
-  ([conn-opts] (stop-consumers! conn-opts (consumer-name nil)))
-  ;; todo stop just consumers of a stream/group combination
-  ([conn-opts consumer-name-pattern]
-   (let [all-clients (car/wcar conn-opts (car/client-list))
-         consumer-clients (->> (string/split-lines all-clients)
-                               (filter #(re-find (re-pattern consumer-name-pattern) %))
-                               (map #(subs (re-find #"id=\d*\b" %) 3)))]
-     (car/wcar conn-opts (mapv #(car/client-unblock % :error) consumer-clients )))))
 
 (defn group-stats
   "Useful stats about the consumer group"
@@ -152,6 +141,22 @@
                             count
                             dec
                             (max 0)))))
+
+(defn stop-consumers!
+  "Stop all the consumers for the consumer group by sending an UNBLOCK message"
+  ([conn-opts] (stop-consumers! conn-opts (consumer-name nil)))
+  ([conn-opts consumer-name-pattern]
+   (let [all-clients (car/wcar conn-opts (car/client-list))
+         consumer-clients (->> (string/split-lines all-clients)
+                               (filter #(re-find (re-pattern consumer-name-pattern) %))
+                               (map #(subs (re-find #"id=\d*\b" %) 3)))]
+     (car/wcar conn-opts (mapv #(car/client-unblock % :error) consumer-clients ))))
+  ([conn-opts stream group]
+   (let [consumer-names (->> (group-stats conn-opts stream group)
+                             :consumers
+                             (map :name))]
+     (doseq [consumer-name consumer-names]
+       (stop-consumers! conn-opts consumer-name)))))
 
 (defn message-exceeds? [thresholds [_ _ idle deliveries]]
   (or (and (:idle thresholds)

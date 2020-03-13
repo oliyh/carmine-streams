@@ -131,11 +131,34 @@
           (is (every? #(nil? (deref % 100 ::timed-out)) consumers)))))))
 
 (deftest stop-consumers-test
-  (testing "can stop explicit consumer")
+  (let [stream (cs/stream-name "my-stream")
+        group (cs/group-name "my-group")]
+    (cs/create-consumer-group! conn-opts stream group)
 
-  (testing "can stop consumers for a stream/group")
+    (testing "can stop explicit consumer"
+      (let [consumer (future (cs/start-consumer! conn-opts stream group (cs/consumer-name "consumer" 0) identity))
+            another-consumer (future (cs/start-consumer! conn-opts stream group (cs/consumer-name "consumer" 1) identity))]
+        (cs/stop-consumers! conn-opts (cs/consumer-name "consumer" 0))
+        (is (nil? (deref consumer 200 ::timed-out)))
+        (is (= ::timed-out (deref another-consumer 100 ::timed-out)))
 
-  (testing "can stop all consumers"))
+        (testing "can stop consumers for a stream/group"
+          (cs/stop-consumers! conn-opts stream group)
+          (is (nil? (deref another-consumer 100 ::timed-out)))))))
+
+  (testing "can stop all consumers"
+    (let [consumers (reduce (fn [acc k]
+                              (let [stream (cs/stream-name k)
+                                    group (cs/group-name k)]
+                                (cs/create-consumer-group! conn-opts stream group)
+                                (conj acc (future (cs/start-consumer! conn-opts stream group (cs/consumer-name k 0) identity)))))
+                            []
+                            ["foo" "bar" "baz"])]
+      (Thread/sleep 100)
+
+      (is (pos? (count consumers)))
+      (cs/stop-consumers! conn-opts)
+      (is (every? #(nil? (deref % 100 ::timed-out)) consumers)))))
 
 (deftest pending-processing-test
   (let [stream (cs/stream-name "my-stream")
@@ -302,9 +325,3 @@
                  consumers-pending)))
 
         (is (= 10 (count @processed-messages)))))))
-
-(cs/gc-consumer-group! conn-opts stream group {:rebalance {:idle 99999999
-                                                           :siblings :active
-                                                           :distribution :random}
-                                               :dlq {:deliveries 1
-                                                     :stream "dlq"}})
