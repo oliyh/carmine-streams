@@ -202,38 +202,50 @@
                            (remove #(and (pos? (:pending %))
                                          (< (:idle rebalance) (:idle %)))
                                    all-consumers)
-                           all-consumers)]
-    (if (empty? active-consumers)
-      (log/warn logging-context "No active consumers found" all-consumers)
+                           all-consumers)
+        actions (transient [])]
+    (doseq [consumer-name (map :name all-consumers)
+            :let [logging-context (assoc logging-context :consumer consumer-name)]]
+      (loop [last-id "-"]
+        (let [pending-messages (car/wcar
+                                conn-opts
+                                (car/xpending stream group last-id "+" 100 consumer-name))]
+          (when (seq pending-messages)
+            (car/wcar conn-opts
+                      (doseq [[message-id _consumer idle deliveries :as message] pending-messages]
+                        (cond
+                          (and dlq (message-exceeds? dlq message))
+                          (do (log/info logging-context "Sending message" message-id "to" (:stream dlq) message)
+                              (car/xack stream group message-id)
+                              (car/xadd (:stream dlq) "*" "stream" stream "group" group "consumer" consumer-name "id" message-id "idle" idle "deliveries" deliveries)
+                              (conj! actions {:action :dlq
+                                              :id message-id
+                                              :consumer consumer-name}))
 
-      (doseq [consumer-name (map :name all-consumers)
-              :let [logging-context (assoc logging-context :consumer consumer-name)]]
-        (loop [last-id "-"]
-          (let [pending-messages (car/wcar
-                                  conn-opts
-                                  (car/xpending stream group last-id "+" 100 consumer-name))]
-            (when (seq pending-messages)
-              (car/wcar conn-opts
-                        (doseq [[message-id _consumer idle deliveries :as message] pending-messages]
-                          (cond
-                            (and dlq (message-exceeds? dlq message))
-                            (do (log/info logging-context "Sending message" message-id "to" (:stream dlq) message)
-                                (car/xack stream group message-id)
-                                (car/xadd (:stream dlq) "*" "stream" stream "group" group "consumer" consumer-name "id" message-id "idle" idle "deliveries" deliveries))
+                          (and rebalance (message-exceeds? rebalance message))
+                          (if-let [claimant (as-> active-consumers %
+                                           (condp = (:distribution rebalance)
+                                             :activity (sort-by :idle %)
+                                             :inactivity (sort-by :idle > %)
+                                             (shuffle %))
+                                           (map :name %)
+                                           (set %)
+                                           (disj % consumer-name)
+                                           (first %))]
+                            (do (log/info logging-context "Claiming message" message-id "for" claimant message)
+                                (car/xclaim stream group claimant idle message-id)
+                                (conj! actions {:action :rebalance
+                                                :id message-id
+                                                :consumer consumer-name
+                                                :claimant claimant}))
+                            (do (log/warn "No active consumers found")
+                                (conj! actions {:action :failed-rebalance
+                                                :id message-id
+                                                :consumer consumer-name})))
 
-                            (and rebalance (message-exceeds? rebalance message))
-                            (let [next-consumer (as-> active-consumers %
-                                                  (condp = (:distribution rebalance)
-                                                    :activity (sort-by :idle %)
-                                                    :inactivity (sort-by :idle > %)
-                                                    (shuffle %))
-                                                  (map :name %)
-                                                  (set %)
-                                                  (disj % consumer-name)
-                                                  (first %))]
-                              (log/info logging-context "Claiming message" message-id "for" next-consumer message)
-                              (car/xclaim stream group next-consumer idle message-id))
-
-                            :else
-                            :noop)))
-              (recur (next-id (first (last pending-messages)))))))))))
+                          :else
+                          (conj! actions {:action :noop
+                                          :id message-id
+                                          :consumer consumer-name}))))
+            (recur (next-id (first (last pending-messages))))))))
+    (persistent! actions)))

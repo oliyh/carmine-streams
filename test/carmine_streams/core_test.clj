@@ -251,8 +251,9 @@
 
       (testing "a gc moves it to the dlq"
         (let [dlq (cs/stream-name "dlq")]
-          (cs/gc-consumer-group! conn-opts stream group {:dlq {:deliveries 1
-                                                               :stream dlq}})
+          (is (= [{:action :dlq, :id "0-1", :consumer consumer}]
+                 (cs/gc-consumer-group! conn-opts stream group {:dlq {:deliveries 1
+                                                                      :stream dlq}})))
 
           (is (= {:name group
                   :pending 0
@@ -312,9 +313,11 @@
                  consumers-pending))))
 
       (testing "a gc is a no-op when the criteria aren't met"
-        (cs/gc-consumer-group! conn-opts stream group {:rebalance {:idle 99999999
-                                                                   :siblings :active
-                                                                   :distribution :random}})
+        (is (every?
+             #(= :noop (:action %))
+             (cs/gc-consumer-group! conn-opts stream group {:rebalance {:idle 99999999
+                                                                        :siblings :active
+                                                                        :distribution :random}})))
 
         (let [consumers-pending (->> (cs/group-stats conn-opts stream group)
                                      :consumers
@@ -327,9 +330,14 @@
                  consumers-pending))))
 
       (testing "a gc moves it to another consumer"
-        (cs/gc-consumer-group! conn-opts stream group {:rebalance {:idle 0
-                                                                   :siblings :active
-                                                                   :distribution :random}})
+        (is (every?
+             (fn [{:keys [action consumer claimant]}]
+               (and (= :rebalance action)
+                    (= dead-consumer consumer)
+                    (= alive-consumer claimant)))
+             (cs/gc-consumer-group! conn-opts stream group {:rebalance {:idle 0
+                                                                        :siblings :active
+                                                                        :distribution :random}})))
 
         (is (true? (deref succeeded? 500 ::timed-out)))
 

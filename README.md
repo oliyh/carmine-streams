@@ -179,6 +179,11 @@ The two possibilities are handled differently:
                                                            :distribution :random}
                                                :dlq {:deliveries 5
                                                      :stream "dlq"}})
+
+;; returns
+[{:action :dlq, :id "0-1", :consumer "consumer/messages/0"}
+ {:action :rebalance, :id "0-2", :consumer "consumer/messages/0", :claimant "consumer/messages/1"}
+ {:action :noop, :id "0-3", :consumer "consumer/messages/1"}]
 ```
 
 GC behaviour is as follows:
