@@ -21,6 +21,23 @@
   (is (= {:a 1 :b 2 :c 3}
          (cs/kvs->map ["a" 1 "c" 3 "b" 2]))))
 
+(deftest xadd-map-test
+  (let [stream (cs/stream-name "maps")
+        ids (car/wcar conn-opts
+                      (cs/xadd-map stream "0-1" {:a 1})
+                      (cs/xadd-map stream "0-2" {:a 2 :b 3})
+                      (cs/xadd-map stream {:a 3}))]
+
+    (is (= 3 (count ids)))
+    (is (= ["0-1" "0-2"] (take 2 ids)))
+
+    (let [[[_stream messages]] (car/wcar conn-opts (car/xread :count 3 :streams stream "0-0"))]
+      (is (= [{:a "1"}
+              {:a "2" :b "3"}
+              {:a "3"}]
+             (map (fn [[_id kvs]] (cs/kvs->map kvs))
+                  messages))))))
+
 (deftest next-id-test
   (are [from expected] (= expected (cs/next-id from))
     "0-0" "0-1" ;; smallest id redis supports
@@ -233,22 +250,23 @@
                (dissoc (cs/group-stats conn-opts stream group) :consumers))))
 
       (testing "a gc moves it to the dlq"
-        (cs/gc-consumer-group! conn-opts stream group {:dlq {:deliveries 1
-                                                             :stream "dlq"}})
+        (let [dlq (cs/stream-name "dlq")]
+          (cs/gc-consumer-group! conn-opts stream group {:dlq {:deliveries 1
+                                                               :stream dlq}})
 
-        (is (= {:name group
-                :pending 0
-                :last-delivered-id "0-1"
-                :unconsumed 0}
-               (dissoc (cs/group-stats conn-opts stream group) :consumers)))
+          (is (= {:name group
+                  :pending 0
+                  :last-delivered-id "0-1"
+                  :unconsumed 0}
+                 (dissoc (cs/group-stats conn-opts stream group) :consumers)))
 
-        (let [[message] (car/wcar conn-opts (car/xread :count 1 :streams "dlq" "0-0"))
-              [_stream-name [[_message-id kvs]]] message]
-          (is (= {:stream stream
-                  :group group
-                  :consumer consumer
-                  :id "0-1"}
-                 (dissoc (cs/kvs->map kvs) :idle :deliveries)))))))
+          (let [[message] (car/wcar conn-opts (car/xread :count 1 :streams dlq "0-0"))
+                [_stream-name [[_message-id kvs]]] message]
+            (is (= {:stream stream
+                    :group group
+                    :consumer consumer
+                    :id "0-1"}
+                   (dissoc (cs/kvs->map kvs) :idle :deliveries))))))))
 
   (testing "dead consumer messages are rebalanced to other consumers"
     (let [stream (cs/stream-name "dead-consumers")
