@@ -13,12 +13,12 @@ and gain visibility on the state of it all with a few simple functions.
 
 ## Usage
 
-- [Creating consumer groups and consumers](#creating-consumer-groups-and-consumers)
+- [Consumer groups and consumers](#consumer-groups-and-consumers)
 - [Visibility](#visibility)
 - [Recovering from failures](#recovering-from-failures)
 - [Utilities](#utilities)
 
-### Creating consumer groups and consumers
+### Consumer groups and consumers
 
 #### Naming things
 
@@ -31,6 +31,14 @@ Consistent naming conventions for streams, groups and consumers:
 (def stream (cs/stream-name "sensor-readings"))        ;; -> stream/sensor-readings
 (def group (cs/group-name "persist-readings"))         ;; -> group/persist-readings
 (def consumer (cs/consumer-name "persist-readings" 0)) ;; -> consumer/persist-readings/0
+```
+
+#### Writing to streams
+
+A convenience function for writing Clojure maps to streams:
+
+```clj
+(car/wcar conn-opts (cs/xadd-map {:foo "bar"}))
 ```
 
 #### Consumer group creation
@@ -46,7 +54,8 @@ Idempotent consumer group creation:
 Start an infinite loop that consumes from the group:
 
 ```clj
-(def opts {:block 5000})
+(def opts {:block 5000
+           :control-fn cs/default-control-fn})
 
 (future
  (cs/start-consumer! conn-opts
@@ -73,6 +82,18 @@ Consumer behaviour is as follows:
  Options to the consumer consist of:
 
  - `:block` ms to block waiting for a new message before checking the backlog
+ - `:control-fn` allows you to control the execution flow of the consumer (see below)
+
+#### Control flow
+
+The default control flow is as follows:
+- Exit on errors reading from Redis
+- Recur on successful message callback
+- Recur on failed message callback
+
+You can provide your own `:control-fn` callback to change or add additional behaviour
+to the consumer. The `control-fn` may do whatever it pleases
+but must return either `:exit` or `:recur`. See `default-control-fn` for an example.
 
 #### Stop consumers
 

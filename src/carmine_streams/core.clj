@@ -59,6 +59,20 @@
             true ;; consumer group already exists
             (throw t))))))
 
+(defn default-control-fn [phase context value & [id kvs]]
+  (cond
+    (and (instance? Throwable value)
+         (= :callback phase))
+    (do (log/error value context "Error in callback processing" id kvs)
+        :recur)
+
+    (instance? Throwable value)
+    (do (log/error value context "Exception during" phase ", exiting")
+        :exit)
+
+    :else
+    :recur))
+
 (defn start-consumer!
   "Consumer behaviour is as follows:
 
@@ -76,8 +90,9 @@
  Options to the consumer consist of:
 
  - `:block` ms to block waiting for a new message before checking the backlog"
-  [conn-opts stream group consumer-name f & [{:keys [block]
-                                              :or {block 5000}
+  [conn-opts stream group consumer-name f & [{:keys [block control-fn]
+                                              :or {block 5000
+                                                   control-fn default-control-fn}
                                               :as opts}]]
   (let [logging-context {:stream stream
                          :group group
@@ -93,8 +108,7 @@
                                            :streams stream
                                            (or last-id ">")))
                  (catch Throwable t
-                   (log/error t logging-context "Exception reading from stream, exiting")
-                   t))]
+                   [nil t]))]
 
         (cond
           (and (instance? Exception response)
@@ -102,8 +116,9 @@
           (log/info logging-context "Shutdown signal received")
 
           (instance? Exception response)
-          (do (log/error response logging-context "Exception reading from stream, exiting")
-              response)
+          (condp = (control-fn :read logging-context response)
+            :exit response
+            :recur (recur last-id))
 
           :else
           (let [[[_stream-name messages]] response
@@ -114,11 +129,14 @@
                   (recur nil))
 
               kvs
-              (do (try (f (kvs->map kvs))
-                       (car/wcar conn-opts (car/xack stream group id))
-                       (catch Throwable t
-                         (log/error t logging-context "Error in callback processing" id kvs)))
-                  (recur (when last-id id)))
+              (let [v (try (let [v (f (kvs->map kvs))]
+                             (car/wcar conn-opts (car/xack stream group id))
+                             v)
+                           (catch Throwable t
+                             t))]
+                (condp = (control-fn :callback logging-context v id kvs)
+                  :exit v
+                  :recur (recur (when last-id id))))
 
               :else ;; unblocked naturally, this is a quiet time to check for pending messages
               (if (->> (car/xpending stream group "-" "+" 1 consumer-name)

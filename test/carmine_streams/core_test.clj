@@ -344,3 +344,94 @@
                  consumers-pending)))
 
         (is (= 10 (count @processed-messages)))))))
+
+(deftest default-control-fn-test
+  (are [expected phase value] (= expected (cs/default-control-fn phase {} value))
+    :recur :callback {}
+    :recur :callback false
+    :recur :callback nil
+    :recur :callback (Exception. "Couldn't handle message")
+
+    :exit :read (Exception. "Blew up reading from Redis")))
+
+(deftest control-fn-test
+  (testing "can control from callback"
+    (let [stream (cs/stream-name "callback")
+          group (cs/group-name "callback")
+          consumer-name (cs/consumer-name group 1)
+          callback (constantly :return-foo)
+          control (fn [phase context value id kvs]
+                    (is (= :callback phase))
+                    (is (= {:stream stream
+                            :group group
+                            :consumer consumer-name}
+                           context))
+                    (is (= :return-foo value))
+                    (is (contains? #{"0-1" "0-2"} id))
+                    (is (= ["foo" "bar"] kvs))
+                    (if (= "0-1" id)
+                      :recur
+                      :exit))]
+
+      (cs/create-consumer-group! conn-opts stream group)
+
+      (let [consumer (future (cs/start-consumer! conn-opts
+                                                 stream
+                                                 group
+                                                 consumer-name
+                                                 callback
+                                                 {:control-fn control}))]
+        (Thread/sleep 100) ;; wait for futures to start
+
+        (testing "can recur"
+          (car/wcar conn-opts (cs/xadd-map stream "0-1" {:foo "bar"}))
+          (is (= ::still-running (deref consumer 500 ::still-running))))
+
+        (testing "can exit"
+          (car/wcar conn-opts (cs/xadd-map stream "0-2" {:foo "bar"}))
+          (is (= :return-foo (deref consumer 500 ::still-running)))))))
+
+  (testing "can control from exception"
+    (let [stream (cs/stream-name "no-group")
+          group (cs/group-name "no-group")
+          consumer-name (cs/consumer-name group 1)
+          callback (constantly :return-foo)
+          exception-count (atom 0)
+          control (fn [phase context value]
+                    (is (= :read phase))
+                    (is (= {:stream stream
+                            :group group
+                            :consumer consumer-name}
+                           context))
+                    (is (= :nogroup
+                           (:prefix (ex-data value))))
+                    (if (= 1 (swap! exception-count inc))
+                      :recur
+                      :exit))]
+
+      (let [consumer (future (cs/start-consumer! conn-opts
+                                                 stream
+                                                 group
+                                                 consumer-name
+                                                 callback
+                                                 {:control-fn control}))]
+
+        (is (= :nogroup (:prefix (ex-data (deref consumer 1000 ::still-running)))))
+        (is (= 2 @exception-count)))))
+
+  (testing "exits if control-fn returns unknown value"
+    (let [stream (cs/stream-name "bad-control")
+          group (cs/group-name "bad-control")
+          consumer-name (cs/consumer-name group 1)
+          callback (constantly :return-foo)
+          control (constantly :bad-control)]
+
+      (let [consumer (future (cs/start-consumer! conn-opts
+                                                 stream
+                                                 group
+                                                 consumer-name
+                                                 callback
+                                                 {:control-fn control}))]
+
+        (is (thrown? Exception
+                     (deref consumer 1000 ::still-running)))))))
