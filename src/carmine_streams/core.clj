@@ -59,12 +59,20 @@
             true ;; consumer group already exists
             (throw t))))))
 
+(defn unblocked? [v]
+  (and (instance? Throwable v)
+       (= :unblocked (:prefix (ex-data v)))))
+
 (defn default-control-fn [phase context value & [id kvs]]
   (cond
     (and (instance? Throwable value)
          (= :callback phase))
     (do (log/error value context "Error in callback processing" id kvs)
         :recur)
+
+    (unblocked? value)
+    (do (log/info context "Shutdown signal received")
+        :exit)
 
     (instance? Throwable value)
     (do (log/error value context "Exception during" phase ", exiting")
@@ -112,17 +120,11 @@
                    (catch Throwable t
                      [nil t]))]
 
-          (cond
-            (and (instance? Exception response)
-                 (= :unblocked (:prefix (ex-data response))))
-            (log/info logging-context "Shutdown signal received")
-
-            (instance? Exception response)
+          (if (instance? Exception response)
             (condp = (control-fn :read logging-context response)
               :exit response
               :recur (recur last-id))
 
-            :else
             (let [[[_stream-name messages]] response
                   [[id kvs]] messages]
               (cond
