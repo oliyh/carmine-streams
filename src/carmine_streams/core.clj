@@ -99,52 +99,54 @@
                          :consumer consumer-name}]
     (log/info logging-context "Starting")
     (loop [last-id "0-0"]
-      (let [[_setname-ok? response]
-            (try (car/wcar conn-opts
-                           (car/client-setname consumer-name)
-                           (car/xreadgroup :group group consumer-name
-                                           :block block
-                                           :count 1 ;; one message at a time
-                                           :streams stream
-                                           (or last-id ">")))
-                 (catch Throwable t
-                   [nil t]))]
+      (if (Thread/interrupted)
+        (log/info logging-context "Thread interrupted")
+        (let [[_setname-ok? response]
+              (try (car/wcar conn-opts
+                             (car/client-setname consumer-name)
+                             (car/xreadgroup :group group consumer-name
+                                             :block block
+                                             :count 1 ;; one message at a time
+                                             :streams stream
+                                             (or last-id ">")))
+                   (catch Throwable t
+                     [nil t]))]
 
-        (cond
-          (and (instance? Exception response)
-               (= :unblocked (:prefix (ex-data response))))
-          (log/info logging-context "Shutdown signal received")
+          (cond
+            (and (instance? Exception response)
+                 (= :unblocked (:prefix (ex-data response))))
+            (log/info logging-context "Shutdown signal received")
 
-          (instance? Exception response)
-          (condp = (control-fn :read logging-context response)
-            :exit response
-            :recur (recur last-id))
+            (instance? Exception response)
+            (condp = (control-fn :read logging-context response)
+              :exit response
+              :recur (recur last-id))
 
-          :else
-          (let [[[_stream-name messages]] response
-                [[id kvs]] messages]
-            (cond
-              (and last-id (empty? messages))
-              (do (log/info logging-context "Finished processing pending messages")
-                  (recur nil))
+            :else
+            (let [[[_stream-name messages]] response
+                  [[id kvs]] messages]
+              (cond
+                (and last-id (empty? messages))
+                (do (log/info logging-context "Finished processing pending messages")
+                    (recur nil))
 
-              kvs
-              (let [v (try (let [v (f (kvs->map kvs))]
-                             (car/wcar conn-opts (car/xack stream group id))
-                             v)
-                           (catch Throwable t
-                             t))]
-                (condp = (control-fn :callback logging-context v id kvs)
-                  :exit v
-                  :recur (recur (when last-id id))))
+                kvs
+                (let [v (try (let [v (f (kvs->map kvs))]
+                               (car/wcar conn-opts (car/xack stream group id))
+                               v)
+                             (catch Throwable t
+                               t))]
+                  (condp = (control-fn :callback logging-context v id kvs)
+                    :exit v
+                    :recur (recur (when last-id id))))
 
-              :else ;; unblocked naturally, this is a quiet time to check for pending messages
-              (if (->> (car/xpending stream group "-" "+" 1 consumer-name)
-                       (car/wcar conn-opts)
-                       ffirst)
-                (do (log/info logging-context "Processing pending messages")
-                    (recur "0-0"))
-                (recur nil)))))))))
+                :else ;; unblocked naturally, this is a quiet time to check for pending messages
+                (if (->> (car/xpending stream group "-" "+" 1 consumer-name)
+                         (car/wcar conn-opts)
+                         ffirst)
+                  (do (log/info logging-context "Processing pending messages")
+                      (recur "0-0"))
+                  (recur nil))))))))))
 
 (defn group-stats
   "Useful stats about the consumer group"
