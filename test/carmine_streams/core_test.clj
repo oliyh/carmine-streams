@@ -82,9 +82,6 @@
   (dotimes [_ 3]
     (is (cs/create-consumer-group! conn-opts "foo" "bar"))))
 
-(defn- unblocked? [v]
-  (= :unblocked (:prefix (ex-data v))))
-
 (deftest create-start-and-shutdown-test
   (let [stream (cs/stream-name "my-stream")
         group (cs/group-name "my-group")
@@ -148,7 +145,7 @@
 
         (testing "can stop consumers"
           (cs/stop-consumers! conn-opts (cs/consumer-name consumer-prefix))
-          (is (every? #(unblocked? (deref % 100 ::timed-out)) consumers)))))))
+          (is (every? #(cs/unblocked? (deref % 100 ::timed-out)) consumers)))))))
 
 (deftest stop-consumers-test
   (let [stream (cs/stream-name "my-stream")
@@ -160,12 +157,12 @@
             another-consumer (future (cs/start-consumer! conn-opts stream group (cs/consumer-name "consumer" 1) identity))]
         (Thread/sleep 100)
         (cs/stop-consumers! conn-opts (cs/consumer-name "consumer" 0))
-        (is (unblocked? (deref consumer 100 ::timed-out)))
+        (is (cs/unblocked? (deref consumer 100 ::timed-out)))
         (is (= ::timed-out (deref another-consumer 100 ::timed-out)))
 
         (testing "can stop consumers for a stream/group"
           (cs/stop-consumers! conn-opts stream group)
-          (is (unblocked? (deref another-consumer 100 ::timed-out)))))))
+          (is (cs/unblocked? (deref another-consumer 100 ::timed-out)))))))
 
   (testing "can stop all consumers"
     (let [consumers (reduce (fn [acc k]
@@ -179,7 +176,7 @@
 
       (is (pos? (count consumers)))
       (cs/stop-consumers! conn-opts)
-      (is (every? #(unblocked? (deref % 100 ::timed-out)) consumers)))))
+      (is (every? #(cs/unblocked? (deref % 100 ::timed-out)) consumers)))))
 
 (deftest pending-processing-test
   (let [stream (cs/stream-name "my-stream")
