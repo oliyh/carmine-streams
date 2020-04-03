@@ -9,7 +9,7 @@
 (defn- clear-redis! [f]
   (car/wcar conn-opts (car/flushall))
   (try (f)
-       (finally (cs/stop-consumers! conn-opts))))
+       (finally (cs/unblock-consumers! conn-opts))))
 
 (use-fixtures :each clear-redis!)
 
@@ -143,28 +143,28 @@
                     :unconsumed 0}
                    (dissoc group-stats :consumers)))))
 
-        (testing "can stop consumers"
-          (cs/stop-consumers! conn-opts (cs/consumer-name consumer-prefix))
+        (testing "can unblock consumers"
+          (cs/unblock-consumers! conn-opts (cs/consumer-name consumer-prefix))
           (is (every? #(cs/unblocked? (deref % 100 ::timed-out)) consumers)))))))
 
-(deftest stop-consumers-test
+(deftest unblock-consumers-test
   (let [stream (cs/stream-name "my-stream")
         group (cs/group-name "my-group")]
     (cs/create-consumer-group! conn-opts stream group)
 
-    (testing "can stop explicit consumer"
+    (testing "can unblock explicit consumer"
       (let [consumer (future (cs/start-consumer! conn-opts stream group (cs/consumer-name "consumer" 0) identity))
             another-consumer (future (cs/start-consumer! conn-opts stream group (cs/consumer-name "consumer" 1) identity))]
         (Thread/sleep 100)
-        (cs/stop-consumers! conn-opts (cs/consumer-name "consumer" 0))
+        (cs/unblock-consumers! conn-opts (cs/consumer-name "consumer" 0))
         (is (cs/unblocked? (deref consumer 100 ::timed-out)))
         (is (= ::timed-out (deref another-consumer 100 ::timed-out)))
 
-        (testing "can stop consumers for a stream/group"
-          (cs/stop-consumers! conn-opts stream group)
+        (testing "can unblock consumers for a stream/group"
+          (cs/unblock-consumers! conn-opts stream group)
           (is (cs/unblocked? (deref another-consumer 100 ::timed-out)))))))
 
-  (testing "can stop all consumers"
+  (testing "can unblock all consumers"
     (let [consumers (reduce (fn [acc k]
                               (let [stream (cs/stream-name k)
                                     group (cs/group-name k)]
@@ -175,7 +175,7 @@
       (Thread/sleep 100)
 
       (is (pos? (count consumers)))
-      (cs/stop-consumers! conn-opts)
+      (cs/unblock-consumers! conn-opts)
       (is (every? #(cs/unblocked? (deref % 100 ::timed-out)) consumers)))))
 
 (deftest pending-processing-test
@@ -291,7 +291,7 @@
         (car/wcar conn-opts (car/xadd stream "*" :counter i)))
 
       (is (true? (deref failed? 500 ::timed-out)))
-      (cs/stop-consumers! conn-opts dead-consumer)
+      (cs/unblock-consumers! conn-opts dead-consumer)
 
       (future (cs/start-consumer! conn-opts stream group alive-consumer
                                   (fn [v]

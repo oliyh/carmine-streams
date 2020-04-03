@@ -63,7 +63,13 @@
   (and (instance? Throwable v)
        (= :unblocked (:prefix (ex-data v)))))
 
-(defn default-control-fn [phase context value & [id kvs]]
+(defn default-control-fn
+  "The default control flow for consumers.
+   Must return either `:recur` (to read the next message) or `:exit` to exit the loop.
+   May have any side effects you need.
+   Exits when unblocked via `unblock-consumers!` or any other error reading from redis.
+   Recurs in all other scenarios."
+  [phase context value & [id kvs]]
   (cond
     (and (instance? Throwable value)
          (= :callback phase))
@@ -89,7 +95,7 @@
    If the callback throws an exception the message will not be acked
  - Processes all pending messages on startup before processing new ones
  - Processes new messages until either:
-   - The consumer is stopped (see `stop-consumers!`)
+   - The consumer is explicitly unblocked (see `unblock-consumers!`)
    - There are no messages delivered during the time it was blocked waiting
      for a new message, upon which it will check for pending messages and
      begin processing the backlog if any are found, returning to wait for
@@ -97,7 +103,8 @@
 
  Options to the consumer consist of:
 
- - `:block` ms to block waiting for a new message before checking the backlog"
+ - `:block` ms to block waiting for a new message before checking the backlog
+ - `:control-fn` a function for controlling the flow of operation, see `default-control-fn`"
   [conn-opts stream group consumer-name f & [{:keys [block control-fn]
                                               :or {block 5000
                                                    control-fn default-control-fn}
@@ -169,9 +176,10 @@
                             dec
                             (max 0)))))
 
-(defn stop-consumers!
-  "Stop all the consumers for the consumer group by sending an UNBLOCK message"
-  ([conn-opts] (stop-consumers! conn-opts (consumer-name nil)))
+(defn unblock-consumers!
+  "Unblock all the consumers for the consumer group by sending an UNBLOCK message.
+   The default control-fn will terminate the consumer loop"
+  ([conn-opts] (unblock-consumers! conn-opts (consumer-name nil)))
   ([conn-opts consumer-name-pattern]
    (let [all-clients (car/wcar conn-opts (car/client-list))
          consumer-clients (->> (string/split-lines all-clients)
@@ -183,7 +191,7 @@
                              :consumers
                              (map :name))]
      (doseq [consumer-name consumer-names]
-       (stop-consumers! conn-opts consumer-name)))))
+       (unblock-consumers! conn-opts consumer-name)))))
 
 (defn message-exceeds? [thresholds [_ _ idle deliveries]]
   (or (and (:idle thresholds)

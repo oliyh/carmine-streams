@@ -73,7 +73,7 @@ Consumer behaviour is as follows:
    If the callback throws an exception the message will not be acked
  - Processes all pending messages on startup before processing new ones
  - Processes new messages until either:
-   - The consumer is stopped (see `stop-consumers!`)
+   - The consumer is unblocked (see `unblock-consumers!`)
    - There are no messages delivered during the time it was blocked waiting
      for a new message, upon which it will check for pending messages and
      begin processing the backlog if any are found, returning to wait for
@@ -95,19 +95,19 @@ You can provide your own `:control-fn` callback to change or add additional beha
 to the consumer. The `control-fn` may do whatever it pleases
 but must return either `:exit` or `:recur`. See `default-control-fn` for an example.
 
-#### Stop consumers
+#### Unblock (stop) consumers
 
 Send an unblock message to blocked consumers letting them exit gracefully:
 
 ```clj
-;; stop all consumers matching consumer/*
-(cs/stop-consumers! conn-opts)
+;; unblock all consumers matching consumer/*
+(cs/unblock-consumers! conn-opts)
 
-;; stop only consumers matching consumer/persist-readings/*
-(cs/stop-consumers! conn-opts (cs/consumer-name "persist-readings"))
+;; unblock only consumers matching consumer/persist-readings/*
+(cs/unblock-consumers! conn-opts (cs/consumer-name "persist-readings"))
 
-;; stop all consumers of group
-(cs/stop-consumers! conn-opts stream group)
+;; unblock all consumers of group
+(cs/unblock-consumers! conn-opts stream group)
 ```
 
 ### Visibility
