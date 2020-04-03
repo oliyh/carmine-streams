@@ -87,7 +87,7 @@ Consumer behaviour is as follows:
 #### Control flow
 
 The default control flow is as follows:
-- Exit on errors reading from Redis
+- Exit on errors reading from Redis (including unblocking)
 - Recur on successful message callback
 - Recur on failed message callback
 
@@ -95,9 +95,15 @@ You can provide your own `:control-fn` callback to change or add additional beha
 to the consumer. The `control-fn` may do whatever it pleases
 but must return either `:exit` or `:recur`. See `default-control-fn` for an example.
 
-#### Unblock (stop) consumers
+#### Stopping consumers
 
-Send an unblock message to blocked consumers letting them exit gracefully:
+You should first interrupt the threads that your consumers are running on.
+The interrupt will be checked before each read operation and the consumer will exit gracefully.
+
+In addition you should send an unblock message. This will allow the consumer to stop any blocking
+read of redis it might currently be performing in order to exit.
+
+Sending an unblock message to blocked consumers can be done like this:
 
 ```clj
 ;; unblock all consumers matching consumer/*

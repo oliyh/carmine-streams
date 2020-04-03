@@ -178,6 +178,39 @@
       (cs/unblock-consumers! conn-opts)
       (is (every? #(cs/unblocked? (deref % 100 ::timed-out)) consumers)))))
 
+(deftest stop-consumers-test
+  (testing "an example of how to stop a consumer in another thread"
+    (let [stream (cs/stream-name "stop-consumers")
+          group (cs/group-name "stop-consumers")
+          consumer-name (cs/consumer-name "stop-consumers" 0)
+          waiting? (promise)
+          continue? (promise)
+          finished? (promise)
+          callback (fn [_v]
+                     (deliver waiting? true)
+                     @continue?)]
+      (cs/create-consumer-group! conn-opts stream group)
+
+      (let [consumer (Thread. (fn []
+                                (cs/start-consumer! conn-opts stream group consumer-name callback)
+                                (deliver finished? true)))]
+        (.start consumer)
+        (car/wcar conn-opts (cs/xadd-map stream {:foo "bar"}))
+
+        (is (true? (deref waiting? 1000 ::timed-out)))
+        (testing "sending unblock when not blocking has no effect"
+          ;; consumer is now processing the message, NOT blocking on xreadgroup
+          ;; unblocking should have no effect
+          (cs/unblock-consumers! conn-opts consumer-name)
+          (deliver continue? true)
+          (testing "consumer is still running (blocking on xreadgroup)"
+            (is (= ::timed-out (deref finished? 100 ::timed-out)))))
+
+        (testing "interrupting thread and then unblocking will stop consumer"
+          (.interrupt consumer) ;; set the interrupt flag
+          (cs/unblock-consumers! conn-opts consumer-name) ;; unblock to allow it to check the interrupt flag
+          (is (true? (deref finished? 100 ::timed-out))))))))
+
 (deftest pending-processing-test
   (let [stream (cs/stream-name "my-stream")
         group (cs/group-name "my-group")
