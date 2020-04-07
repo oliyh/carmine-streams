@@ -1,8 +1,7 @@
 (ns carmine-streams.core-test
   (:require [clojure.test :refer [deftest testing is are use-fixtures]]
             [carmine-streams.core :as cs]
-            [taoensso.carmine :as car]
-            [clojure.string :as string]))
+            [taoensso.carmine :as car]))
 
 (def conn-opts {})
 
@@ -26,15 +25,17 @@
         ids (car/wcar conn-opts
                       (cs/xadd-map stream "0-1" {:a 1})
                       (cs/xadd-map stream "0-2" {:a 2 :b 3})
-                      (cs/xadd-map stream {:a 3}))]
+                      (cs/xadd-map stream "*" {:a 3})
+                      (cs/xadd-map stream :MAXLEN "~" 1000 "*" {:a 4}))]
 
-    (is (= 3 (count ids)))
+    (is (= 4 (count ids)))
     (is (= ["0-1" "0-2"] (take 2 ids)))
 
-    (let [[[_stream messages]] (car/wcar conn-opts (car/xread :count 3 :streams stream "0-0"))]
+    (let [[[_stream messages]] (car/wcar conn-opts (car/xread :count 4 :streams stream "0-0"))]
       (is (= [{:a "1"}
               {:a "2" :b "3"}
-              {:a "3"}]
+              {:a "3"}
+              {:a "4"}]
              (map (fn [[_id kvs]] (cs/kvs->map kvs))
                   messages))))))
 
@@ -195,7 +196,7 @@
                                 (cs/start-consumer! conn-opts stream group consumer-name callback)
                                 (deliver finished? true)))]
         (.start consumer)
-        (car/wcar conn-opts (cs/xadd-map stream {:foo "bar"}))
+        (car/wcar conn-opts (cs/xadd-map stream "*" {:foo "bar"}))
 
         (is (true? (deref waiting? 1000 ::timed-out)))
         (testing "sending unblock when not blocking has no effect"
@@ -237,7 +238,7 @@
                                                {:block 100}))]
 
       (testing "wait for first message to fail"
-        (car/wcar conn-opts (car/xadd stream "0-1" :foo "bar"))
+        (car/wcar conn-opts (cs/xadd-map stream "0-1" {:foo "bar"}))
         (is (true? (deref failed? 500 ::timed-out)))
 
         (testing "message is now pending"

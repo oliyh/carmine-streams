@@ -19,10 +19,8 @@
           {}
           (partition-all 2 kvs)))
 
-(defn xadd-map
-  ([stream m] (xadd-map stream "*" m))
-  ([stream id m]
-   (apply car/xadd stream id (reduce into [] m))))
+(defn xadd-map [& args]
+  (apply car/xadd (concat (butlast args) (reduce into [] (last args)))))
 
 (defn next-id
   "Given a redis message id returns the next smallest possible id"

@@ -38,7 +38,17 @@ Consistent naming conventions for streams, groups and consumers:
 A convenience function for writing Clojure maps to streams:
 
 ```clj
-(car/wcar conn-opts (cs/xadd-map {:foo "bar"}))
+(car/wcar conn-opts (cs/xadd-map (cs/stream-name "maps") "*" {:foo "bar"}))
+```
+
+and parsing them back:
+
+```clj
+(let [[[_stream messages]] (car/wcar conn-opts (car/xread :count 1 :streams (cs/stream-name "maps") "0-0"))]
+  (map (fn [[_id kvs]] (cs/kvs->map kvs))
+       messages))
+
+;; [{:foo "bar"}]
 ```
 
 #### Consumer group creation
