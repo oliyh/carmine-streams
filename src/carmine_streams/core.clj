@@ -227,7 +227,12 @@
                           (and dlq (message-exceeds? dlq message))
                           (do (log/info logging-context "Sending message" message-id "to" (:stream dlq) message)
                               (car/xack stream group message-id)
-                              (car/xadd (:stream dlq) "*" "stream" stream "group" group "consumer" consumer-name "id" message-id "idle" idle "deliveries" deliveries)
+                              (xadd-map (:stream dlq) "*" {"stream" stream
+                                                           "group" group
+                                                           "consumer" consumer-name
+                                                           "id" message-id
+                                                           "idle" idle
+                                                           "deliveries" deliveries})
                               (conj! actions {:action :dlq
                                               :id message-id
                                               :consumer consumer-name}))
