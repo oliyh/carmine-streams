@@ -1,6 +1,6 @@
 # carmine-streams
 
-Utility functions for working with [Redis streams](https://redis.io/topics/streams-intro) in [carmine](https://github.com/ptaoussanis/carmine).
+Utility functions for working with [Redis streams](https://redis.io/topics/streams-intro) in Clojure using [carmine](https://github.com/ptaoussanis/carmine).
 
 Redis does a brilliant job of being fast with loads of features and Carmine does a brilliant job of exposing all the low-level Redis commands
 in Clojure. Working with Redis' streams API requires quite a lot of interaction to produce desirable high-level behaviour, and that is what this
