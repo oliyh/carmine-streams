@@ -85,7 +85,7 @@
     :else
     :recur))
 
-(defn start-consumer!
+(defn start-group-consumer!
   "Consumer behaviour is as follows:
 
  - Calls the callback for every message received, with the message
@@ -107,7 +107,8 @@
                                               :or {block 5000
                                                    control-fn default-control-fn}
                                               :as opts}]]
-  (let [logging-context {:stream stream
+  (let [logging-context {:kind :group-consumer
+                         :stream stream
                          :group group
                          :consumer consumer-name}]
     (log/info logging-context "Starting")
@@ -154,6 +155,55 @@
                   (do (log/info logging-context "Processing pending messages")
                       (recur "0-0"))
                   (recur nil))))))))))
+
+(defn start-stream-consumer! [conn-opts stream f & [{:keys [block control-fn process-backlog?]
+                                                     :or {block 5000
+                                                          control-fn default-control-fn}
+                                                     :as opts}]]
+  (let [logging-context {:kind :stream-consumer
+                         :stream stream}]
+    (log/info logging-context "Starting")
+    (loop [last-id (if process-backlog? "0-0" "$")]
+      (if (Thread/interrupted)
+        (log/info logging-context "Thread interrupted")
+
+        (let [response (car/wcar conn-opts (car/xread :count 1
+                                                      :block block
+                                                      :streams stream
+                                                      last-id))]
+
+          (if (instance? Exception response)
+            (condp = (control-fn :read logging-context response)
+              :exit response
+              :recur (recur last-id))
+
+            (let [[[_stream-name messages]] response
+                  [[id kvs]] messages]
+              (cond
+                (and last-id (empty? messages))
+                (do (log/info logging-context "Finished processing all messages in the stream")
+                    (recur last-id))
+
+                kvs
+                (let [v (try (f (kvs->map kvs))
+                             (catch Throwable t t))]
+                  (condp = (control-fn :callback logging-context v id kvs)
+                    :exit v
+                    :recur (recur id)))
+
+                :else ;; not sure
+                (log/info logging-context "not sure how i got here" messages)
+                ))))))))
+
+(defn start-consumer!
+  ([conn-opts stream f]
+   (start-consumer! conn-opts stream f {}))
+  ([conn-opts stream f opts]
+   (start-stream-consumer! conn-opts stream f opts))
+  ([conn-opts stream group consumer-name f]
+   (start-consumer! conn-opts stream group consumer-name f {}))
+  ([conn-opts stream group consumer-name f opts]
+   (start-group-consumer! conn-opts stream group consumer-name f opts)))
 
 (defn group-stats
   "Useful stats about the consumer group"

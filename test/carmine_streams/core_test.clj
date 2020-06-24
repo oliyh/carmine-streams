@@ -258,6 +258,43 @@
                   :unconsumed 0}
                  (dissoc (cs/group-stats conn-opts stream group) :consumers))))))))
 
+(deftest stream-consumer-test
+  (let [stream (cs/stream-name "my-stream")
+        consumed-messages (atom #{})
+        callback (fn [v]
+                   (let [data (update v :temperature read-string)]
+                     (if (neg? (:temperature data))
+                       (throw (Exception. "Too cold!"))
+                       (swap! consumed-messages conj data))))]
+
+    (testing "can create consumer"
+      (let [consumer (future (cs/start-consumer! conn-opts
+                                                 stream
+                                                 callback))]
+        (Thread/sleep 100) ;; wait for futures to start
+
+        (testing "can write to stream and messages are consumed"
+          (car/wcar conn-opts (car/xadd stream "0-1" :temperature 19.7))
+          (Thread/sleep 100)
+
+          (is (= #{{:temperature 19.7}}
+                 @consumed-messages)))
+
+        (testing "exceptions in callback are handled gracefully"
+          (car/wcar conn-opts (car/xadd stream "0-2" :temperature -14.1))
+          (Thread/sleep 100)
+
+          (testing "and consumption carries on"
+            (car/wcar conn-opts (car/xadd stream "0-3" :temperature 33.7))
+            (is (= #{{:temperature 19.7}
+                     {:temperature 33.7}}
+                   @consumed-messages))))
+
+        (testing "can stop consumer"
+          (future-cancel consumer)
+;;          (cs/unblock-consumers! conn-opts (cs/consumer-name consumer-prefix))
+          (is (cs/unblocked? (deref consumer 100 ::timed-out))))))))
+
 (deftest gc-consumer-group-test
 
   (testing "bad messages get moved to the dlq"
@@ -405,7 +442,8 @@
           callback (constantly :return-foo)
           control (fn [phase context value id kvs]
                     (is (= :callback phase))
-                    (is (= {:stream stream
+                    (is (= {:kind :group-consumer
+                            :stream stream
                             :group group
                             :consumer consumer-name}
                            context))
@@ -442,7 +480,8 @@
           exception-count (atom 0)
           control (fn [phase context value]
                     (is (= :read phase))
-                    (is (= {:stream stream
+                    (is (= {:kind :group-consumer
+                            :stream stream
                             :group group
                             :consumer consumer-name}
                            context))
