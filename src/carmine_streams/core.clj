@@ -112,7 +112,7 @@
                          :consumer consumer-name}]
     (log/info logging-context "Starting")
     (loop [last-id "0-0"]
-      (if (Thread/interrupted)
+      (if (.isInterrupted (Thread/currentThread))
         (log/info logging-context "Thread interrupted")
         (let [[_setname-ok? response]
               (try (car/wcar conn-opts
