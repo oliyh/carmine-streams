@@ -514,3 +514,36 @@
 
       (future-cancel consumer)
       (cs/unblock-consumers! conn-opts consumer-name))))
+
+(deftest clear-pending-test
+  (let [stream (cs/stream-name "my-stream")
+        group (cs/group-name "my-group")]
+
+    (testing "add and take some messages, but don't ack them"
+      (car/wcar conn-opts
+                (dotimes [i 5]
+                  (cs/xadd-map stream "*" {:n i})))
+
+      (cs/create-consumer-group! conn-opts stream group "0")
+      (car/wcar conn-opts (car/xreadgroup :group group "consumer-1" :count 3 :streams stream ">"))
+      (car/wcar conn-opts (car/xreadgroup :group group "consumer-2" :count 3 :streams stream ">"))
+
+      (testing "the messages are now pending"
+        (let [group-stats (cs/group-stats conn-opts stream group)]
+          (is (= 5 (:pending group-stats)))
+          (is (= #{{:name "consumer-1" :pending 3}
+                   {:name "consumer-2" :pending 2}}
+                 (->> (:consumers group-stats)
+                      (map #(select-keys % [:name :pending]))
+                      set)))))
+
+      (testing "can clear the pending messages"
+        (cs/clear-pending! conn-opts stream group)
+
+        (let [group-stats (cs/group-stats conn-opts stream group)]
+          (is (zero? (:pending group-stats)))
+          (is (= #{{:name "consumer-1" :pending 0}
+                   {:name "consumer-2" :pending 0}}
+                 (->> (:consumers group-stats)
+                      (map #(select-keys % [:name :pending]))
+                      set))))))))

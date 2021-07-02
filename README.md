@@ -216,6 +216,20 @@ You should run this function periodically, choosing values which trade off the f
 - What the maximum latency for a single message should be before it either fails or succeeds
 - How many times you should attempt to rebalance a message before considering that it is killing consumers or is unprocessable
 
+#### Clearing pending messages
+If you need to clear pending messages from all consumers, or a particular one, you can use one of these:
+
+```clj
+(cs/clear-pending! conn-opts stream group) ;; clears pending messages for all consumers
+
+(cs/clear-pending! conn-opts stream group "consumer-1") ;; clears pending messages for 'consumer-1'
+```
+
+You may want to pair this with trimming the stream (caveat: this can result in data loss):
+```clj
+(car/wcar conn-opts (car/xtrim stream MAXLEN 0))
+```
+
 ### Utilities
 
 #### Message ids

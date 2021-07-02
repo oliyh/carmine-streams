@@ -264,3 +264,16 @@
                                           :consumer consumer-name}))))
             (recur (next-id (first (last pending-messages))))))))
     (persistent! actions)))
+
+(defn clear-pending!
+  ([conn-opts stream group]
+   (doseq [consumer-name (map :name (:consumers (group-stats conn-opts stream group)))]
+     (clear-pending! conn-opts stream group consumer-name)))
+  ([conn-opts stream group consumer-name]
+   (loop [last-id "-"]
+     (let [pending-messages (car/wcar conn-opts (car/xpending stream group last-id "+" 100 consumer-name))]
+       (when (seq pending-messages)
+         (car/wcar conn-opts
+                   (doseq [[message-id] pending-messages]
+                     (car/xack stream group message-id)))
+         (recur (next-id (first (last pending-messages)))))))))
