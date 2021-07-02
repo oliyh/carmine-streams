@@ -137,7 +137,7 @@
                 (do (log/info logging-context "Finished processing pending messages")
                     (recur nil))
 
-                kvs
+                id
                 (let [v (try (let [v (f (kvs->map kvs))]
                                (car/wcar conn-opts (car/xack stream group id))
                                v)

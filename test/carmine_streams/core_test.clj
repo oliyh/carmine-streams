@@ -478,3 +478,39 @@
 
         (is (thrown? Exception
                      (deref consumer 1000 ::still-running)))))))
+
+(deftest nil-values-test
+  (let [stream (cs/stream-name "my-stream")
+        group (cs/group-name "my-group")
+        consumer-name (cs/consumer-name "my-consumer")
+        finished? (promise)
+        values (atom #{})
+        callback (fn [v]
+                   (when (= 4 (count (swap! values conj v)))
+                     (deliver finished? true)))]
+
+    (car/wcar conn-opts (cs/xadd-map stream :MAXLEN 3 "0-1" {:n "1"}))
+    (car/wcar conn-opts (cs/xadd-map stream :MAXLEN 3 "0-2" {:n "2"}))
+    (car/wcar conn-opts (cs/xadd-map stream :MAXLEN 3 "0-3" {:n "3"}))
+
+    (cs/create-consumer-group! conn-opts stream group "0")
+
+    ;; read, but don't ack, the first message from the stream
+    (car/wcar conn-opts (car/xreadgroup :group group consumer-name :count 1 :streams stream ">"))
+    ;; add another message to the stream, the first one is trimmed from the stream when the 4th one is added
+    (car/wcar conn-opts (cs/xadd-map stream :MAXLEN 3 "0-4" {:n "4"}))
+
+    ;; the consumer's personal pending items (read but not acked messages) will now contain a message which
+    ;; has since been deleted from the stream, it should be able to deal with that
+    (let [consumer (future (cs/start-consumer! conn-opts
+                                               stream
+                                               group
+                                               consumer-name
+                                               callback))]
+
+      (is (true? (deref finished? 1000 ::timeout)))
+      (is (= #{{} {:n "2"} {:n "3"} {:n "4"}}
+             @values))
+
+      (future-cancel consumer)
+      (cs/unblock-consumers! conn-opts consumer-name))))
