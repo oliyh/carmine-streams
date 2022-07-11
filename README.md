@@ -160,14 +160,14 @@ Sending an unblock message to blocked consumers can be done like this:
 
 ### Recovering from failures
 
-Garbage collect consumer groups to reallocate pending messages from dead consumers to live ones
-and send undeliverable messages to a Dead Letter Queue (DLQ).
+Garbage collect consumer groups to reallocate pending messages from dead consumers to live ones,
+send undeliverable messages to a Dead Letter Queue (DLQ) and deregister dead consumers from the group.
 
 When a message is not acknowledged by the consumer (i.e. your consumer died halfway through,
 or the callback threw an exception) it remains pending and its idle time is how long it has been
 since it was first read.
 
-The two possibilities are handled differently:
+These two possibilities are handled differently:
 
 - If your consumer died and remains dead
   - The delivery count will remain at 1 and the idle time will increase
@@ -180,6 +180,8 @@ The two possibilities are handled differently:
       - `:random` random
       - `:lra` least-recently-active (with the highest idle time)
       - `:mra` most-recently-active (with the lowest idle time)
+  - The `:deregister` option specifies
+    - The `:idle` time necessary for a consumer to be considered dead and not coming back, whereupon it will be removed from the group
 - If the message was bad and the worker throws an exception trying to process it
   - It will remain in the backlog which the worker will attempt to process during quiet times
   - The delivery count will increase on each attempt
@@ -194,7 +196,8 @@ The two possibilities are handled differently:
                                                            :siblings :active
                                                            :distribution :random}
                                                :dlq {:deliveries 5
-                                                     :stream "dlq"}})
+                                                     :stream "dlq"}
+                                               :deregister {:idle 120000})
 
 ;; returns
 [{:action :dlq, :id "0-1", :consumer "consumer/messages/0"}

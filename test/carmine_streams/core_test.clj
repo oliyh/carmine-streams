@@ -385,7 +385,15 @@
                   alive-consumer 0}
                  consumers-pending)))
 
-        (is (= 10 (count @processed-messages)))))))
+        (is (= 10 (count @processed-messages))))
+
+      (testing "consumers are deregistered when exceeding the deregister threshold"
+        (is (= [{:action :deregister
+                 :consumer dead-consumer}]
+               (cs/gc-consumer-group! conn-opts stream group {:deregister {:idle 100}})))
+        (let [consumers (:consumers (cs/group-stats conn-opts stream group))]
+          (is (= 1 (count consumers)))
+          (is (= alive-consumer (:name (first consumers)))))))))
 
 (deftest default-control-fn-test
   (are [expected phase value] (= expected (cs/default-control-fn phase {} value))

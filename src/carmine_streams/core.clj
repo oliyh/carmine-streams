@@ -197,13 +197,13 @@
       (and (:deliveries thresholds)
            (<= (:deliveries thresholds) deliveries))))
 
-(defn gc-consumer-group! [conn-opts stream group & [{:keys [rebalance
-                                                            dlq]
+(defn gc-consumer-group! [conn-opts stream group & [{:keys [rebalance dlq deregister]
                                                      :or {rebalance {:siblings :active
                                                                      :distribution :random
                                                                      :idle (* 60 1000)}
                                                           dlq {:stream (stream-name "dlq")
-                                                               :deliveries 10}}
+                                                               :deliveries 10}
+                                                          deregister {:idle (* 10 60 1000)}}
                                                      :as opts}]]
   (let [logging-context {:stream stream
                          :group group}
@@ -263,6 +263,15 @@
                                           :id message-id
                                           :consumer consumer-name}))))
             (recur (next-id (first (last pending-messages))))))))
+
+    (doseq [consumer all-consumers
+            :when (< (:idle deregister) (:idle consumer))]
+      (car/wcar conn-opts
+                (car/xgroup :delconsumer stream group (:name consumer)))
+      (log/info "Deregistering consumer" (:name consumer) "which has been idle for" (:idle consumer) "ms")
+      (conj! actions {:action :deregister
+                      :consumer (:name consumer)}))
+
     (persistent! actions)))
 
 (defn clear-pending!
