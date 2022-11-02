@@ -47,6 +47,15 @@
     ;; biggest id redis supports
     "18446744073709551615-18446744073709551614" "18446744073709551615-18446744073709551615"))
 
+(deftest prev-id-test
+  (are [from expected] (= expected (cs/prev-id from))
+    "0-1" "0-0" ;; smallest id redis supports
+    "123-234" "123-233"
+    "123" "122-18446744073709551615"
+    ;; biggest id redis supports
+    "18446744073709551615-18446744073709551615" "18446744073709551615-18446744073709551614"
+    "18446744073709551615-0" "18446744073709551614-18446744073709551615"))
+
 (deftest all-stream-names-test
   (testing "empty at first"
     (is (= #{} (cs/all-stream-keys conn-opts))))
@@ -102,14 +111,17 @@
               :pending 0
               :last-delivered-id "0-0"
               :unconsumed 0}
-             (cs/group-stats conn-opts stream group))))
+             (dissoc
+              (cs/group-stats conn-opts stream group)
+              :entries-read :lag))))
 
     (testing "can create consumers"
-      (let [consumers (mapv #(future (cs/start-consumer! conn-opts
-                                                         stream
-                                                         group
-                                                         (cs/consumer-name consumer-prefix %)
-                                                         callback))
+      (let [consumers (mapv #(future (cs/start-multi-consumer! conn-opts
+                                                               [stream]
+                                                               group
+                                                               (cs/consumer-name consumer-prefix %)
+                                                               "my-delivery-counts"
+                                                               callback))
                             (range 3))]
         (Thread/sleep 100) ;; wait for futures to start
 
@@ -119,7 +131,7 @@
                     :pending 0
                     :last-delivered-id "0-0"
                     :unconsumed 0}
-                   (dissoc group-stats :consumers)))
+                   (dissoc group-stats :consumers :entries-read :lag)))
 
             (is (= [{:name "consumer/my-consumer/0" :pending 0}
                     {:name "consumer/my-consumer/1" :pending 0}
@@ -142,20 +154,33 @@
                     :pending 1
                     :last-delivered-id "0-2"
                     :unconsumed 0}
-                   (dissoc group-stats :consumers)))))
+                   (dissoc group-stats :consumers :entries-read :lag)))))
 
         (testing "can unblock consumers"
           (cs/unblock-consumers! conn-opts (cs/consumer-name consumer-prefix))
-          (is (every? #(cs/unblocked? (deref % 100 ::timed-out)) consumers)))))))
+          (is (every? #(cs/unblocked? (deref % 100 ::timed-out)) consumers)))))
+    (testing "consumers are not deregistered when idle time is not exceeded"
+      (cs/create-consumer-group! conn-opts stream group)
+
+      (is (= ["consumer/my-consumer/0"
+              "consumer/my-consumer/1"
+              "consumer/my-consumer/2"]
+             (map :name (:consumers (cs/group-stats conn-opts stream group))))))
+
+    (testing "consumers are deregistered when idle time is exceeded"
+      (cs/create-consumer-group! conn-opts stream group "$" {:deregister-idle 1})
+
+      (is (= [] (:consumers (cs/group-stats conn-opts stream group)))))))
 
 (deftest unblock-consumers-test
   (let [stream (cs/stream-name "my-stream")
-        group (cs/group-name "my-group")]
+        group (cs/group-name "my-group")
+        deliveries "my-deliveries"]
     (cs/create-consumer-group! conn-opts stream group)
 
     (testing "can unblock explicit consumer"
-      (let [consumer (future (cs/start-consumer! conn-opts stream group (cs/consumer-name "consumer" 0) identity))
-            another-consumer (future (cs/start-consumer! conn-opts stream group (cs/consumer-name "consumer" 1) identity))]
+      (let [consumer (future (cs/start-multi-consumer! conn-opts [stream] group (cs/consumer-name "consumer" 0) deliveries identity))
+            another-consumer (future (cs/start-multi-consumer! conn-opts [stream] group (cs/consumer-name "consumer" 1) deliveries identity))]
         (Thread/sleep 100)
         (cs/unblock-consumers! conn-opts (cs/consumer-name "consumer" 0))
         (is (cs/unblocked? (deref consumer 100 ::timed-out)))
@@ -168,9 +193,10 @@
   (testing "can unblock all consumers"
     (let [consumers (reduce (fn [acc k]
                               (let [stream (cs/stream-name k)
-                                    group (cs/group-name k)]
+                                    group (cs/group-name k)
+                                    deliveries "my-deliveries"]
                                 (cs/create-consumer-group! conn-opts stream group)
-                                (conj acc (future (cs/start-consumer! conn-opts stream group (cs/consumer-name k 0) identity)))))
+                                (conj acc (future (cs/start-multi-consumer! conn-opts [stream] group (cs/consumer-name k 0) deliveries identity)))))
                             []
                             ["foo" "bar" "baz"])]
       (Thread/sleep 100)
@@ -193,7 +219,7 @@
       (cs/create-consumer-group! conn-opts stream group)
 
       (let [consumer (Thread. (fn []
-                                (cs/start-consumer! conn-opts stream group consumer-name callback)
+                                (cs/start-multi-consumer! conn-opts [stream] group consumer-name "my-deliveries" callback)
                                 (deliver finished? true)))]
         (.start consumer)
         (car/wcar conn-opts (cs/xadd-map stream "*" {:foo "bar"}))
@@ -230,12 +256,14 @@
 
     (is (cs/create-consumer-group! conn-opts stream group))
 
-    (let [consumer (future (cs/start-consumer! conn-opts
-                                               stream
-                                               group
-                                               (cs/consumer-name consumer-prefix 1)
-                                               callback
-                                               {:block 100}))]
+    (let [consumer (future (cs/start-multi-consumer! conn-opts
+                                                     [stream]
+                                                     group
+                                                     (cs/consumer-name consumer-prefix 1)
+                                                     "my-deliveries"
+                                                     callback
+                                                     {:block 100
+                                                      :claim-opts {:min-idle-time 1000}}))]
 
       (testing "wait for first message to fail"
         (car/wcar conn-opts (cs/xadd-map stream "0-1" {:foo "bar"}))
@@ -246,7 +274,8 @@
                   :pending 1
                   :last-delivered-id "0-1"
                   :unconsumed 0}
-                 (dissoc (cs/group-stats conn-opts stream group) :consumers))))
+                 (dissoc (cs/group-stats conn-opts stream group)
+                         :consumers :entries-read :lag))))
 
         (testing "will check backlog and process"
           (reset! succeed? true)
@@ -256,10 +285,10 @@
                   :pending 0
                   :last-delivered-id "0-1"
                   :unconsumed 0}
-                 (dissoc (cs/group-stats conn-opts stream group) :consumers))))))))
+                 (dissoc (cs/group-stats conn-opts stream group)
+                         :consumers :entries-read :lag))))))))
 
-(deftest gc-consumer-group-test
-
+(deftest abandoned-message-processing-test
   (testing "bad messages get moved to the dlq"
     (let [stream (cs/stream-name "bad-messages")
           group (cs/group-name "bad-messages")
@@ -267,11 +296,16 @@
           failed? (promise)
           callback (fn [v]
                      (deliver failed? true)
-                     (throw (Exception. "Bad message")))]
+                     (throw (Exception. "Bad message")))
+          dlq (cs/stream-name "dlq")]
 
       (is (cs/create-consumer-group! conn-opts stream group))
 
-      (future (cs/start-consumer! conn-opts stream group consumer callback))
+      (future (cs/start-multi-consumer! conn-opts [stream] group consumer "my-deliveries" callback
+                                        {:block 100
+                                         :claim-opts {:min-idle-time 1000
+                                                      :max-deliveries 1
+                                                      :dlq {:stream dlq}}}))
 
       (car/wcar conn-opts (car/xadd stream "0-1" :foo "bar"))
       (is (true? (deref failed? 500 ::timed-out)))
@@ -281,29 +315,31 @@
                 :pending 1
                 :last-delivered-id "0-1"
                 :unconsumed 0}
-               (dissoc (cs/group-stats conn-opts stream group) :consumers))))
+               (dissoc (cs/group-stats conn-opts stream group)
+                       :consumers :entries-read :lag))))
 
-      (testing "a gc moves it to the dlq"
-        (let [dlq (cs/stream-name "dlq")]
-          (is (= [{:action :dlq, :id "0-1", :consumer consumer}]
-                 (cs/gc-consumer-group! conn-opts stream group {:dlq {:deliveries 1
-                                                                      :stream dlq}})))
+      (testing "a consumer's periodic gc moves it to the dlq"
+        (let [[message] (car/wcar conn-opts (car/xread :block 2500 :streams dlq "0-0"))
+              [_stream-name [[_message-id kvs]]] message]
+          (is (= {:stream stream
+                  :group group
+                  :consumer consumer
+                  :id "0-1"
+                  :message ["foo" "bar"]}
+                 (dissoc (cs/kvs->map kvs) :idle :deliveries))))
 
-          (is (= {:name group
-                  :pending 0
-                  :last-delivered-id "0-1"
-                  :unconsumed 0}
-                 (dissoc (cs/group-stats conn-opts stream group) :consumers)))
+        (is (= {:name group
+                :pending 0
+                :last-delivered-id "0-1"
+                :unconsumed 0}
+               (dissoc (cs/group-stats conn-opts stream group)
+                       :consumers :entries-read :lag)))
+        (testing "messages delivery counts are cleaned-up when moved to the dlq"
+          (is (= [] (car/wcar conn-opts
+                              (car/hgetall "my-deliveries"))))
+          (car/wcar conn-opts (car/del "my-deliveries"))))))
 
-          (let [[message] (car/wcar conn-opts (car/xread :count 1 :streams dlq "0-0"))
-                [_stream-name [[_message-id kvs]]] message]
-            (is (= {:stream stream
-                    :group group
-                    :consumer consumer
-                    :id "0-1"}
-                   (dissoc (cs/kvs->map kvs) :idle :deliveries))))))))
-
-  (testing "dead consumer messages are rebalanced to other consumers"
+  (testing "alive consumers can rescue abandoned messages"
     (let [stream (cs/stream-name "dead-consumers")
           group (cs/group-name "dead-consumers")
           alive-consumer (cs/consumer-name "dead-consumers" "alive")
@@ -311,15 +347,22 @@
           processed-messages (atom #{})
           failed-messages (atom #{})
           failed? (promise)
-          succeeded? (promise)]
+          succeeded? (promise)
+          start-alive-consumer! #(future
+                                   (cs/start-multi-consumer! conn-opts [stream] group alive-consumer "my-deliveries"
+                                                             (fn [v]
+                                                               (when (= 10 (count (swap! processed-messages conj v)))
+                                                                 (deliver succeeded? true)))
+                                                             {:block 100
+                                                              :claim-opts {:min-idle-time %}}))]
 
       (is (cs/create-consumer-group! conn-opts stream group))
 
-      (future (cs/start-consumer! conn-opts stream group dead-consumer
-                                  (fn [v]
-                                    (when (= 10 (count (swap! failed-messages conj v)))
-                                      (deliver failed? true))
-                                    (throw (Exception. "I'm going to die")))))
+      (future (cs/start-multi-consumer! conn-opts [stream] group dead-consumer "my-deliveries"
+                                        (fn [v]
+                                          (when (= 10 (count (swap! failed-messages conj v)))
+                                            (deliver failed? true))
+                                          (throw (Exception. "I'm going to die")))))
 
       (dotimes [i 10]
         (car/wcar conn-opts (car/xadd stream "*" :counter i)))
@@ -327,11 +370,7 @@
       (is (true? (deref failed? 500 ::timed-out)))
       (cs/unblock-consumers! conn-opts dead-consumer)
 
-      (future (cs/start-consumer! conn-opts stream group alive-consumer
-                                  (fn [v]
-                                    (when (= 10 (count (swap! processed-messages conj v)))
-                                      (deliver succeeded? true)))
-                                  {:block 100}))
+      (start-alive-consumer! 99999)
 
       (Thread/sleep 100)
 
@@ -346,32 +385,17 @@
                   alive-consumer 0}
                  consumers-pending))))
 
-      (testing "a gc is a no-op when the criteria aren't met"
-        (is (every?
-             #(= :noop (:action %))
-             (cs/gc-consumer-group! conn-opts stream group {:rebalance {:idle 99999999
-                                                                        :siblings :active
-                                                                        :distribution :random}})))
+      (testing "delivery counts are stored"
+        (is (= (repeat 10 "1")
+               (vals
+                (car/wcar conn-opts
+                          (car/parse-map
+                           (car/hgetall "my-deliveries")))))))
 
-        (let [consumers-pending (->> (cs/group-stats conn-opts stream group)
-                                     :consumers
-                                     (reduce (fn [acc {:keys [name pending]}]
-                                               (assoc acc name pending))
-                                             {}))]
-
-          (is (= {dead-consumer 10
-                  alive-consumer 0}
-                 consumers-pending))))
-
-      (testing "a gc moves it to another consumer"
-        (is (every?
-             (fn [{:keys [action consumer claimant]}]
-               (and (= :rebalance action)
-                    (= dead-consumer consumer)
-                    (= alive-consumer claimant)))
-             (cs/gc-consumer-group! conn-opts stream group {:rebalance {:idle 0
-                                                                        :siblings :active
-                                                                        :distribution :random}})))
+      (testing "the message is rescued"
+        (cs/unblock-consumers! conn-opts)
+        ;; make an alive consumer that rescues abandoned messages frequently
+        (start-alive-consumer! 100)
 
         (is (true? (deref succeeded? 500 ::timed-out)))
 
@@ -387,13 +411,105 @@
 
         (is (= 10 (count @processed-messages))))
 
-      (testing "consumers are deregistered when exceeding the deregister threshold"
-        (is (= [{:action :deregister
-                 :consumer dead-consumer}]
-               (cs/gc-consumer-group! conn-opts stream group {:deregister {:idle 100}})))
-        (let [consumers (:consumers (cs/group-stats conn-opts stream group))]
-          (is (= 1 (count consumers)))
-          (is (= alive-consumer (:name (first consumers)))))))))
+      (testing "delivery counts are deleted for processed messages"
+        (is (= [] (car/wcar conn-opts (car/hgetall "my-deliveries"))))))))
+
+(deftest priorities-test
+  (let [streams (map #(cs/stream-name (str "stream-priority-" %)) (range 4))
+        group (cs/group-name "priority")
+        consumer-name (cs/consumer-name group 1)
+        delivered (atom [])
+        callback (fn [v] (swap! delivered conj v))]
+    (cs/create-consumer-group! conn-opts streams group "0-0")
+
+    (car/wcar
+     conn-opts
+     (doseq [i (range 10)]
+       (cs/xadd-map (nth streams (mod i 4)) (str "0-" (inc i)) {:foo i})))
+
+    (testing "new messages processed in priority order"
+      (future (cs/start-multi-consumer! conn-opts streams group consumer-name "my-deliveries" callback))
+      (Thread/sleep 200)
+      (is (= ["0" "4" "8" "1" "5" "9" "2" "6" "3" "7"]
+             (map :foo @delivered))))
+
+    (cs/unblock-consumers! conn-opts)
+
+    (testing "failed messages get retried after a single lower priority message"
+      (let [to-fail (atom #{"0" "5"})
+            callback (fn [v]
+                       (when (@to-fail (:foo v))
+                         (swap! to-fail disj (:foo v))
+                         (throw (Exception. "I'm supposed to fail now.")))
+                       (swap! delivered conj v))]
+        (car/wcar
+         conn-opts
+         (doseq [i (range 10)]
+           ;; priority is based on the number modulo 4
+           (cs/xadd-map (nth streams (mod i 4)) (str "1-" (inc i)) {:foo i})))
+
+        (reset! delivered [])
+
+        (future (cs/start-multi-consumer! conn-opts streams group consumer-name "my-deliveries" callback))
+
+        (Thread/sleep 100)
+
+        (is (= ["4" "8" "1" "0" "9" "2" "5" "6" "3" "7"]
+               (map :foo @delivered)))))
+
+    (cs/unblock-consumers! conn-opts)
+
+    (testing "process high, then rescue high, then rescue low"
+      (reset! delivered [])
+      (let [dead-consumer (cs/consumer-name "dead-consumer" 0)
+            alive-consumer (cs/consumer-name "alive-consumer" 0)
+            succeeded? (promise)]
+
+        (car/wcar conn-opts
+                  (cs/xadd-map (nth streams 0) "*" {:foo "to-rescue-0"})
+                  (cs/xadd-map (nth streams 1) "*" {:foo "to-rescue-1.0"})
+                  (cs/xadd-map (nth streams 1) "*" {:foo "to-rescue-1.1"})
+                  (cs/xadd-map (nth streams 1) "*" {:foo "to-rescue-1.2"})
+                  (cs/xadd-map (nth streams 3) "*" {:foo "to-rescue-3"}))
+
+        (future (cs/start-multi-consumer! conn-opts streams group dead-consumer "my-deliveries"
+                                          (fn [_]
+                                            (throw (Exception. "I'm mortal.")))))
+        (Thread/sleep 100)
+        (cs/unblock-consumers! conn-opts)
+        (is (= [1 3 0 1]
+               (for [stream streams]
+                 (:pending (cs/group-stats conn-opts stream group)))))
+
+        (car/wcar conn-opts
+                  (cs/xadd-map (nth streams 0) "*" {:foo "good-0"})
+                  (cs/xadd-map (nth streams 2) "*" {:foo "good-2.0"})
+                  (cs/xadd-map (nth streams 2) "*" {:foo "good-2.1"})
+                  (cs/xadd-map (nth streams 2) "*" {:foo "good-2.3"}))
+
+        (future (cs/start-multi-consumer! conn-opts streams group alive-consumer "my-deliveries"
+                                          (fn [v]
+                                            (when (= 9 (count (swap! delivered conj (:foo v))))
+                                              (deliver succeeded? true))
+                                            (Thread/sleep 50))
+                                          {:block 100
+                                           :claim-opts
+                                           {:min-idle-time 50}}))
+
+        (is (true? (deref succeeded? 7500 ::timed-out)))
+
+        (Thread/sleep 100)
+        ;; order is not entirely priority order, but there is only one
+        ;; incorrect lower priority call before each higher priority
+        ;; message is rescued.
+        (is (= ["good-0" "good-2.0"
+                "to-rescue-0"
+                "good-2.1"
+                "to-rescue-1.0" "to-rescue-1.1" "to-rescue-1.2"
+                "good-2.3"
+                "to-rescue-3"]
+               @delivered))
+        ))))
 
 (deftest default-control-fn-test
   (are [expected phase value] (= expected (cs/default-control-fn phase {} value))
@@ -413,7 +529,7 @@
           callback (constantly :return-foo)
           control (fn [phase context value id kvs]
                     (is (= :callback phase))
-                    (is (= {:stream stream
+                    (is (= {:streams [stream]
                             :group group
                             :consumer consumer-name}
                            context))
@@ -426,12 +542,13 @@
 
       (cs/create-consumer-group! conn-opts stream group)
 
-      (let [consumer (future (cs/start-consumer! conn-opts
-                                                 stream
-                                                 group
-                                                 consumer-name
-                                                 callback
-                                                 {:control-fn control}))]
+      (let [consumer (future (cs/start-multi-consumer! conn-opts
+                                                       [stream]
+                                                       group
+                                                       consumer-name
+                                                       "my-deliveries"
+                                                       callback
+                                                       {:control-fn control}))]
         (Thread/sleep 100) ;; wait for futures to start
 
         (testing "can recur"
@@ -450,7 +567,7 @@
           exception-count (atom 0)
           control (fn [phase context value]
                     (is (= :read phase))
-                    (is (= {:stream stream
+                    (is (= {:streams [stream]
                             :group group
                             :consumer consumer-name}
                            context))
@@ -459,13 +576,13 @@
                     (if (= 1 (swap! exception-count inc))
                       :recur
                       :exit))]
-
-      (let [consumer (future (cs/start-consumer! conn-opts
-                                                 stream
-                                                 group
-                                                 consumer-name
-                                                 callback
-                                                 {:control-fn control}))]
+      (let [consumer (future (cs/start-multi-consumer! conn-opts
+                                                       [stream]
+                                                       group
+                                                       consumer-name
+                                                       "my-deliveries"
+                                                       callback
+                                                       {:control-fn control}))]
 
         (is (= :nogroup (:prefix (ex-data (deref consumer 1000 ::still-running)))))
         (is (= 2 @exception-count)))))
@@ -477,12 +594,13 @@
           callback (constantly :return-foo)
           control (constantly :bad-control)]
 
-      (let [consumer (future (cs/start-consumer! conn-opts
-                                                 stream
-                                                 group
-                                                 consumer-name
-                                                 callback
-                                                 {:control-fn control}))]
+      (let [consumer (future (cs/start-multi-consumer! conn-opts
+                                                       [stream]
+                                                       group
+                                                       consumer-name
+                                                       "my-deliveries"
+                                                       callback
+                                                       {:control-fn control}))]
 
         (is (thrown? Exception
                      (deref consumer 1000 ::still-running)))))))
@@ -510,11 +628,12 @@
 
     ;; the consumer's personal pending items (read but not acked messages) will now contain a message which
     ;; has since been deleted from the stream, it should be able to deal with that
-    (let [consumer (future (cs/start-consumer! conn-opts
-                                               stream
-                                               group
-                                               consumer-name
-                                               callback))]
+    (let [consumer (future (cs/start-multi-consumer! conn-opts
+                                                     [stream]
+                                                     group
+                                                     consumer-name
+                                                     "my-deliveries"
+                                                     callback))]
 
       (is (true? (deref finished? 1000 ::timeout)))
       (is (= #{{} {:n "2"} {:n "3"} {:n "4"}}
