@@ -234,48 +234,67 @@
 (defn- get-pending-work!
   [{:keys [conn-opts streams group consumer-name logging-context stream->message last-ids]
     :as context}
-   rescue-abandoned?]
-  (let [;; if a stream is processing pending messages (has a non-nil
-        ;; last-id) or just received a new message, then we don't want
-        ;; to check for abandoned work on that stream or any lower
-        ;; priority streams
-        streams-to-check (take-while
-                          #(and (nil? (last-ids %))
-                                (nil? (stream->message %)))
-                          streams)
-        stream->pending (delay
-                         (when (seq streams-to-check)
-                           (->> (car/with-replies
-                                  (apply
-                                   car/xreadgroup :group group
-                                   consumer-name
-                                   :count 1
-                                   :streams
-                                   (concat streams-to-check
-                                           (map (constantly "0-0")
-                                                streams-to-check))))
-                                (map (fn [[stream messages]]
-                                       [stream (first messages)]))
-                                (into {}))))]
-    {:stream-with-pending-messages
-     (car/wcar
-      conn-opts
-      (car/return
-       (->> streams-to-check
-            (filter
-             (fn [stream]
-               (or (when rescue-abandoned?
-                     (let [rescued-messages (rescue-abandoned-work! context stream)]
-                       (when (seq rescued-messages)
-                         (log/info (assoc logging-context :stream stream)
-                                   "Rescued abandoned messages")
-                         true)))
-                   (when (get @stream->pending stream)
-                     (log/info (assoc logging-context :stream stream)
-                               "Found my own pending messages")
-                     true))))
-            first)))
-     :checked-streams streams-to-check}))
+   rescue-abandoned?
+   may-have-pending?]
+  (car/wcar
+   conn-opts
+   (car/return
+    (let [;; if a stream is processing pending messages (has a non-nil
+          ;; last-id) or just received a new message, then we don't want
+          ;; to check for abandoned work on that stream or any lower
+          ;; priority streams
+          streams-to-check
+          (take-while
+           #(and (nil? (last-ids %))
+                 (nil? (stream->message %)))
+           streams)
+
+          stream->pending
+          (let [streams-to-check
+                (filter may-have-pending? streams-to-check)]
+            (when (seq streams-to-check)
+              (->> (car/with-replies
+                     (apply
+                      car/xreadgroup :group group
+                      consumer-name
+                      :count 1
+                      :streams
+                      (concat streams-to-check
+                              (map (constantly "0-0")
+                                   streams-to-check))))
+                   (map (fn [[stream messages]]
+                          [stream (first messages)]))
+                   (into {}))))
+
+          rescued-message-stream
+          (when rescue-abandoned?
+            (->> streams-to-check
+                 (filter
+                  (fn [stream]
+                    (or (let [rescued-messages (rescue-abandoned-work! context stream)]
+                          (when (seq rescued-messages)
+                            (log/info (assoc logging-context :stream stream)
+                                      "Rescued abandoned messages")
+                            ;; rescued some messages, stop looking
+                            true))
+                        (when (get stream->pending stream)
+                          (log/info (assoc logging-context :stream stream)
+                                    "Found my own pending messages")
+                          ;; even though we didn't rescue any
+                          ;; messages, there are none to rescue that
+                          ;; are higher priority than this stream with
+                          ;; pending messages, so just return this one
+                          true))))
+                 first))]
+      {:streams-with-pending-messages
+       (-> (->> stream->pending
+                (filter val)
+                (map key))
+           set
+           (cond-> rescued-message-stream
+             (conj rescued-message-stream)))
+
+       :checked-streams streams-to-check}))))
 
 (defn- update-last-ids
   [{:keys [stream->message logging-context last-ids]} received-message]
@@ -340,6 +359,7 @@
     (loop [last-ids           (->> streams
                                    (map (fn [stream] [stream "0-0"]))
                                    (into {}))
+           may-have-pending? #{}
            last-pending-check (System/currentTimeMillis)]
       (if (.isInterrupted (Thread/currentThread))
         (log/info logging-context "Thread interrupted")
@@ -362,7 +382,7 @@
           (if (instance? Exception response)
             (case (control-fn :read logging-context response)
               :exit response
-              :recur (recur last-ids last-pending-check))
+              :recur (recur last-ids may-have-pending? last-pending-check))
             (let [;; response format is:
                   ;; [["stream3" [[id3 message3]]]
                   ;;  ["stream1" [[id1 message1]]]]
@@ -392,14 +412,20 @@
                       (> (- (System/currentTimeMillis) last-pending-check)
                          min-idle-time)
 
-                      {:keys [stream-with-pending-messages
+                      {:keys [streams-with-pending-messages
                               checked-streams]}
                       (get-pending-work! context
-                                         rescue-abandoned?)]
+                                         rescue-abandoned?
+                                         may-have-pending?)]
                   (recur
-                   (-> (update-last-ids context received-message)
-                       (cond-> stream-with-pending-messages
-                         (assoc stream-with-pending-messages "0-0")))
+                   (into (update-last-ids context received-message)
+                         (map (fn [stream] [stream "0-0"])
+                              streams-with-pending-messages))
+                   (as-> may-have-pending? %
+                     (apply disj % checked-streams)
+                     (cond-> %
+                       received-message
+                       (conj (:stream received-message))))
                    (if (and rescue-abandoned? (seq checked-streams))
                      (System/currentTimeMillis)
                      last-pending-check)))))))))))
