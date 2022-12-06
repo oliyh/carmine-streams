@@ -14,6 +14,9 @@
   ([s] (str "consumer/" s))
   ([s i] (str "consumer/" s "/" i)))
 
+(defn group-name->delivery-counts-key [consumer]
+  (str "delivery-counts/" consumer))
+
 (defn kvs->map [kvs]
   (reduce (fn [m [k v]]
             (assoc m (keyword k) v))
@@ -171,7 +174,7 @@
      (#(do (when (seq %)
              (log/info logging-context "Found" (count %) "pending message(s)"))
            %))
-     (mapv
+     (map
       (fn [[id owner idle _ :as pending-message]]
         (let [delivery-counts-key (str stream "/" id)
               delivery-count
@@ -228,6 +231,7 @@
             (when should-retry?
               (log/info logging-context consumer-name "claimed message" pending-message))
             should-retry?))))
+     doall
      ;; only messages that should be re-tried
      (filter identity))))
 
@@ -269,14 +273,16 @@
           rescued-message-stream
           (when rescue-abandoned?
             (->> streams-to-check
-                 (filter
+                 (some
                   (fn [stream]
                     (or (let [rescued-messages (rescue-abandoned-work! context stream)]
                           (when (seq rescued-messages)
                             (log/info (assoc logging-context :stream stream)
                                       "Rescued abandoned messages")
                             ;; rescued some messages, stop looking
-                            true))
+                            ;; (return this stream name from the
+                            ;; enclosing `some`)
+                            stream))
                         (when (get stream->pending stream)
                           (log/info (assoc logging-context :stream stream)
                                     "Found my own pending messages")
@@ -284,8 +290,9 @@
                           ;; messages, there are none to rescue that
                           ;; are higher priority than this stream with
                           ;; pending messages, so just return this one
-                          true))))
-                 first))]
+                          ;; (return this stream name from the
+                          ;; enclosing `some`)
+                          stream))))))]
       {:streams-with-pending-messages
        (-> (->> stream->pending
                 (filter val)
@@ -336,7 +343,7 @@
    last-ids))
 
 (defn start-multi-consumer!
-  [conn-opts streams group consumer-name delivery-counts f
+  [conn-opts streams group consumer-name f
    & [{:keys [block control-fn]
        :or   {block      5000
               control-fn default-control-fn}
@@ -347,6 +354,7 @@
   (let [logging-context {:streams  streams
                          :group    group
                          :consumer consumer-name}
+        delivery-counts (group-name->delivery-counts-key group)
         context         {:conn-opts       conn-opts
                          :streams         streams
                          :group           group
@@ -356,10 +364,8 @@
                          :claim-opts      claim-opts
                          :logging-context logging-context}]
     (log/info logging-context "Starting")
-    (loop [last-ids           (->> streams
-                                   (map (fn [stream] [stream "0-0"]))
-                                   (into {}))
-           may-have-pending? #{}
+    (loop [last-ids           (zipmap streams (repeat "0-0"))
+           may-have-pending?  #{}
            last-pending-check (System/currentTimeMillis)]
       (if (.isInterrupted (Thread/currentThread))
         (log/info logging-context "Thread interrupted")
@@ -381,7 +387,7 @@
                   e))]
           (if (instance? Exception response)
             (case (control-fn :read logging-context response)
-              :exit response
+              :exit  response
               :recur (recur last-ids may-have-pending? last-pending-check))
             (let [;; response format is:
                   ;; [["stream3" [[id3 message3]]]
@@ -419,8 +425,7 @@
                                          may-have-pending?)]
                   (recur
                    (into (update-last-ids context received-message)
-                         (map (fn [stream] [stream "0-0"])
-                              streams-with-pending-messages))
+                         (zipmap streams-with-pending-messages (repeat "0-0")))
                    (as-> may-have-pending? %
                      (apply disj % checked-streams)
                      (cond-> %
@@ -485,7 +490,7 @@
            (doseq [consumer consumers
                    :when (>= (:idle consumer) deregister-idle)]
              (car/xgroup :delconsumer stream group (:name consumer))
-             (log/info "Deregistering consumer" (:name consumer) "which has been idle for" (:idle consumer) "ms"))
+             (log/info "Deregistered" (:name consumer) "which has been idle for" (:idle consumer) "ms"))
            exists?))
        (if (coll? streams) streams [streams])))))))
 
