@@ -87,6 +87,8 @@
     :recur))
 
 (defn- process-highest-priority!
+  "Looks through the streams in priority order for a message to process,
+  and process the highest priority one. Also, calls the `control-fn`."
   [{:keys [conn-opts streams group delivery-counts f
            last-ids stream->message logging-context]}
    control-fn]
@@ -140,7 +142,15 @@
       {:control-instruction :recur})))
 
 (defn- rescue-abandoned-work!
-  "Should be called from within a wcar."
+  "For a single stream: steal up to `max-rescue-count` messages from
+  other consumers if their messages have been idle for too long.
+  Moves messages into the DLQ when they have been retried too many
+  times (from both other consumers' idle messages and any of this
+  consumer's pending).
+
+  Returns true if anything was rescued.
+
+  Should be called from within a wcar."
   [{:keys [delivery-counts group logging-context consumer-name]
     {:keys [min-idle-time max-deliveries message-rescue-count]
      :or {min-idle-time (* 60 1000)
@@ -233,9 +243,28 @@
             should-retry?))))
      doall
      ;; only messages that should be re-tried
-     (filter identity))))
+     (filter identity)
+     seq
+     boolean)))
 
 (defn- get-pending-work!
+  "Looks through streams to see if there are any messages that
+  are:
+   - pending for this consumer or
+   - should be claimed from other consumers to become pending for this
+     consumer.
+
+  We only look for pending messages on streams that are higher
+  priority than then stream that just received a message, because even
+  if we found pending messages, we wouldn't be able to process them
+  yet anyway. We also don't bother looking for pending messages on
+  streams that are lower priority than the highest priority stream
+  that already has pending messages.
+
+  We will only claim messages from other consumers if the
+  `rescue-abandoned?` argument is true, otherwise we only look for
+  pending messages on this consumer caused by an error whilst
+  processing a previous message."
   [{:keys [conn-opts streams logging-context stream->message last-ids]
     :as context}
    rescue-abandoned?
@@ -257,8 +286,8 @@
           (some
            (fn [stream]
              (or (when rescue-abandoned?
-                   (let [rescued-messages (rescue-abandoned-work! context stream)]
-                     (when (seq rescued-messages)
+                   (let [rescued-messages? (rescue-abandoned-work! context stream)]
+                     (when rescued-messages?
                        (log/info (assoc logging-context :stream stream)
                                  "Rescued abandoned messages")
                        ;; rescued some messages, stop looking
@@ -280,6 +309,8 @@
        :checked-streams streams-to-check}))))
 
 (defn- update-last-ids
+  "Works out the correct message ID to use for each stream in the next
+  xreadgroup call."
   [{:keys [stream->message logging-context last-ids]} received-message]
   (walk/walk
    (fn [[stream last-id]]
@@ -319,6 +350,62 @@
    last-ids))
 
 (defn start-multi-consumer!
+  "Starts a consumer that listens for messages on one or more streams,
+  processing them mostly in priority order. A message is considered
+  higher priority if its stream appears earlier in the list of streams
+  passed to this function.
+
+  A single consumer will process messages completely in priority order
+  unless there is an error while processing. It will then not process
+  the message that failed until after it has processed one message of
+  the next lowest priority (unless no messages arrive while it is
+  blocked waiting to receive one, in which case it will retry the
+  failed message).
+
+
+  Consumer behaviour is as follows:
+
+  - Calls the callback for every message received, with the message
+    coerced into a keywordized map, and acks the message.
+    If the callback throws an exception the message will not be acked
+  - Processes all pending messages for a given stream on startup before
+    processing new ones. Processes new high priority messages before
+    processing pending low priority ones.
+  - If there is only one stream receiving new messages, then the consumer
+    processes new messages until either:
+    - It is explicitly unblocked (see `unblock-consumers!`)
+    - There are no messages delivered during the time it was blocked
+      waiting or there is a higher priority stream that may have pending
+      messages, upon which it will check for pending messages and begin
+      processing the backlog if any are found, returning to wait for new
+      messages when the backlog is cleared
+
+  When checking for pending messages, if it has been sufficiently long
+  since the last check, it will check for idle messages on the backlog
+  of other consumers and claim them, or putting messages on the dlq if
+  they have been retried too many times. This ensures that even if a
+  consumer dies, its messages will still get processed.
+
+  Options consist of:
+
+  - `:block` ms to block waiting for a new message when there are no
+    pending messages on any of the streams
+  - `:control-fn` a function for controlling the flow of operation, see `default-control-fn`
+
+  - `:claim-opts` an options map for configuring how messages are
+    claimed from other consumers. Available claim options are:
+    - `:min-idle-time` the minimum time (ms) a message has to be idle
+      before it can be claimed. Also the minimum amount of time between
+      checking for abandoned messages
+    - `:max-deliveries` the maximum number of times a message should
+      be delivered (attempted to be processed) before it is put in
+      the dlq
+    - `:message-rescue-count` the number of message to attempt to
+      claim in one go
+    - `:dlq` dead letter queue options map. Options are:
+      - `:stream` the stream to which poison messages are added
+      - `:include-message?` set this to false if you don't want
+        to include original message content in the dlq message"
   [conn-opts streams group consumer-name f
    & [{:keys [block control-fn]
        :or   {block      5000
