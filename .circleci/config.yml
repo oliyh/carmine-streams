@@ -3,7 +3,7 @@ jobs:
   build:
     docker:
       - image: circleci/clojure:lein-2.9.1-browsers
-      - image: circleci/redis:latest
+      - image: cimg/redis:7.0.5
     steps:
       - checkout
 

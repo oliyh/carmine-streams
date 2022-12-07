@@ -110,10 +110,9 @@
               :consumers []
               :pending 0
               :last-delivered-id "0-0"
-              :unconsumed 0}
-             (dissoc
-              (cs/group-stats conn-opts stream group)
-              :entries-read :lag))))
+              :unconsumed 0
+              :entries-read nil}
+             (dissoc (cs/group-stats conn-opts stream group) :lag))))
 
     (testing "can create consumers"
       (let [consumers (mapv #(future (cs/start-multi-consumer! conn-opts
@@ -129,8 +128,9 @@
             (is (= {:name group
                     :pending 0
                     :last-delivered-id "0-0"
-                    :unconsumed 0}
-                   (dissoc group-stats :consumers :entries-read :lag)))
+                    :unconsumed 0
+                    :entries-read nil}
+                   (dissoc group-stats :consumers :lag)))
 
             (is (= [{:name "consumer/my-consumer/0" :pending 0}
                     {:name "consumer/my-consumer/1" :pending 0}
@@ -152,8 +152,9 @@
             (is (= {:name group
                     :pending 1
                     :last-delivered-id "0-2"
-                    :unconsumed 0}
-                   (dissoc group-stats :consumers :entries-read :lag)))))
+                    :unconsumed 0
+                    :entries-read 2}
+                   (dissoc group-stats :consumers :lag)))))
 
         (testing "can unblock consumers"
           (cs/unblock-consumers! conn-opts (cs/consumer-name consumer-prefix))
@@ -269,9 +270,10 @@
         (is (= {:name group
                 :pending 1
                 :last-delivered-id "0-1"
-                :unconsumed 0}
+                :unconsumed 0
+                :entries-read 1}
                (dissoc (cs/group-stats conn-opts stream group)
-                       :consumers :entries-read :lag))))
+                       :consumers :lag))))
 
       (testing "will check backlog and process"
         (reset! succeed? true)
@@ -280,9 +282,10 @@
         (is (= {:name group
                 :pending 0
                 :last-delivered-id "0-1"
-                :unconsumed 0}
+                :unconsumed 0
+                :entries-read 1}
                (dissoc (cs/group-stats conn-opts stream group)
-                       :consumers :entries-read :lag)))))))
+                       :consumers :lag)))))))
 
 (deftest abandoned-message-processing-test
   (testing "bad messages get moved to the dlq"
@@ -310,9 +313,10 @@
         (is (= {:name group
                 :pending 1
                 :last-delivered-id "0-1"
-                :unconsumed 0}
+                :unconsumed 0
+                :entries-read 1}
                (dissoc (cs/group-stats conn-opts stream group)
-                       :consumers :entries-read :lag))))
+                       :consumers :lag))))
 
       (testing "a consumer's periodic gc moves it to the dlq"
         (let [[message] (car/wcar conn-opts (car/xread :block 2500 :streams dlq "0-0"))
@@ -327,9 +331,10 @@
         (is (= {:name group
                 :pending 0
                 :last-delivered-id "0-1"
-                :unconsumed 0}
+                :unconsumed 0
+                :entries-read 1}
                (dissoc (cs/group-stats conn-opts stream group)
-                       :consumers :entries-read :lag)))
+                       :consumers :lag)))
         (testing "messages delivery counts are cleaned-up when moved to the dlq"
           (is (= [] (car/wcar conn-opts
                               (car/hgetall (cs/group-name->delivery-counts-key group)))))
