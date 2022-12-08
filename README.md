@@ -35,13 +35,13 @@ Consistent naming conventions for streams, groups and consumers:
 
 #### Writing to streams
 
-A convenience function for writing Clojure maps to streams:
+A convenience function `xadd-map` for writing Clojure maps to streams:
 
 ```clj
 (car/wcar conn-opts (cs/xadd-map (cs/stream-name "maps") "*" {:foo "bar"}))
 ```
 
-and parsing them back:
+and parsing them back with `kvs->map`:
 
 ```clj
 (let [[[_stream messages]] (car/wcar conn-opts (car/xread :count 1 :streams (cs/stream-name "maps") "0-0"))]
@@ -245,7 +245,7 @@ Get the next smallest message id (useful for iterating through ranges as per `xr
 
 ## Development
 
-Start a normal REPL. You will need redis-server v5+ running on the default port to run the tests.
+Start a normal REPL. You will need redis-server v6.2.4+ running on the default port to run the tests.
 
 [![CircleCI](https://circleci.com/gh/oliyh/carmine-streams.svg?style=svg)](https://circleci.com/gh/oliyh/carmine-streams)
 
