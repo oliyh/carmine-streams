@@ -386,6 +386,8 @@
   they have been retried too many times. This ensures that even if a
   consumer dies, its messages will still get processed.
 
+  The `streams` parameter can be a stream or a sequence of streams.
+
   Options consist of:
 
   - `:block` ms to block waiting for a new message when there are no
@@ -414,7 +416,8 @@
         :or   {min-idle-time (* 60 1000)}
         :as   claim-opts}
        :claim-opts}]]
-  (let [logging-context {:streams  streams
+  (let [streams         (if (coll? streams) streams [streams])
+        logging-context {:streams  streams
                          :group    group
                          :consumer consumer-name}
         delivery-counts (group-name->delivery-counts-key group)
@@ -540,27 +543,25 @@
    (car/wcar
     conn-opts
     (car/return
-     (every?
-      identity
-      ;; `every?` short-circuits on a false value, be we want to
-      ;; attempt to create every group, so use `mapv`
-      (mapv
-       (fn [stream]
-         (let [exists? (try (= "OK"
-                               (car/with-replies
-                                 (car/xgroup :create stream group from-id :mkstream)))
-                            (catch Throwable t
-                              (if (= :busygroup (:prefix (ex-data t)))
-                                true ;; consumer group already exists
-                                (throw t))))
+     (->> (if (coll? streams) streams [streams])
+          (map
+           (fn [stream]
+             (let [exists? (try (= "OK"
+                                   (car/with-replies
+                                     (car/xgroup :create stream group from-id :mkstream)))
+                                (catch Throwable t
+                                  (if (= :busygroup (:prefix (ex-data t)))
+                                    true ;; consumer group already exists
+                                    (throw t))))
 
-               {:keys [consumers]} (group-stats conn-opts stream group)]
-           (doseq [consumer consumers
-                   :when (>= (:idle consumer) deregister-idle)]
-             (car/xgroup :delconsumer stream group (:name consumer))
-             (log/info "Deregistered" (:name consumer) "which has been idle for" (:idle consumer) "ms"))
-           exists?))
-       (if (coll? streams) streams [streams])))))))
+                   {:keys [consumers]} (group-stats conn-opts stream group)]
+               (doseq [consumer consumers
+                       :when (>= (:idle consumer) deregister-idle)]
+                 (car/xgroup :delconsumer stream group (:name consumer))
+                 (log/info "Deregistered" (:name consumer) "which has been idle for" (:idle consumer) "ms"))
+               exists?)))
+          doall
+          (every? identity))))))
 
 (defn unblock-consumers!
   "Unblock all the consumers for the consumer group by sending an UNBLOCK message.

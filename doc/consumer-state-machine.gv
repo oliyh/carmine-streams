@@ -1,0 +1,146 @@
+digraph consumer_state {
+
+start [shape=plain]
+
+state_pending
+[
+ label =
+ "(e.g. \"0-0\")
+ looking for pending
+ messages";
+ ]
+
+state_new
+[
+ label =
+ "\">\"
+ looking for
+ new messages";
+ group=vertical_align1;
+ ]
+
+{
+        rank=same;
+        state_pending; state_new;
+}
+
+decision_pending
+[
+ label =
+ "pending
+ messages found on
+ this stream?";
+ shape = diamond;
+ ]
+
+start -> state_pending
+state_pending -> decision_pending
+
+decision_process
+[
+ label =
+ "this is the
+ highest priority stream with
+ a message on it?";
+ shape = diamond;
+ ]
+
+process_message
+[
+ label =
+ "process message";
+ shape = rect;
+ ]
+
+not_processed
+[
+ label =
+ "message has not
+ been processed,
+ give it another shot";
+ shape = rect;
+ ]
+
+decision_pending -> decision_process [taillabel="yes"]
+decision_pending -> state_new [taillabel="no"]
+
+decision_process -> process_message [taillabel="yes"]
+decision_process -> not_processed [taillabel="no"]
+
+not_processed -> state_pending [label="same message ID as\nbefore, or \"0-0\"\nif the message is new"]
+
+message_origin
+[
+ label =
+ "message origin";
+ shape = diamond;
+ ]
+
+next_id
+[
+ label =
+ "next ID";
+ shape = rect;
+ ]
+
+{
+        rank=same;
+        message_origin; next_id;
+}
+
+process_message -> message_origin
+message_origin -> next_id [taillabel="pending"]
+next_id -> state_pending
+
+message_origin -> state_new [taillabel="new"]
+
+
+new_message
+[
+ label =
+ "a new message
+ arrives?";
+ shape = diamond;
+ group=vertical_align1;
+ ]
+
+decision_idle
+[
+ label =
+ "consumer is idle
+ and has not checked
+ the pending queue
+ in a while";
+ shape = diamond;
+ group=vertical_align1;
+ ]
+
+check_queue
+[
+ label =
+ "look at this consumer's own
+ pending messages and other
+ consumers' idle messages.
+ claim them or put in the DLQ,
+ as appropriate.";
+ shape = rect;
+ group=vertical_align1;
+ ]
+
+decision_claimed
+[
+ label =
+ "claimed any?";
+ shape = diamond;
+ group=vertical_align1;
+ ]
+
+state_new -> new_message
+new_message -> decision_process [taillabel="yes", labeldistance=2]
+new_message -> decision_idle [label="timed out or\nfound a message\non another stream"]
+decision_idle -> check_queue [taillabel="yes"]
+decision_idle -> state_new [taillabel="no", labeldistance=2]
+check_queue -> decision_claimed
+decision_claimed -> state_pending [taillabel="yes"]
+decision_claimed -> state_new [taillabel="no"]
+}
