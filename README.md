@@ -116,6 +116,8 @@ of other consumers and claim them, or putting messages on the dlq if
 they have been retried too many times. This ensures that even if a
 consumer dies, its messages will still be processed.
 
+#### Consumers with multiple streams
+
 A consumer can also be passed multiple streams:
 
 ```clj
@@ -146,9 +148,8 @@ Options to the consumer consist of:
 - `:claim-opts` an options map for configuring how messages are
   claimed from other consumers. See [Recovering from failures](#recovering-from-failures) for available options.
 
-The behaviour of a single stream of a consumer that has multiple streams is given (slightly simplified) by this flowchart:
-
-![consumer flowchart](https://g.gravizo.com/source/svg?https%3A%2F%2Fraw.githubusercontent.com%2Folisolomons%2Fcarmine-streams%2Fpriority-streams%2Fdoc%2Fconsumer-state-machine.gv)
+Each stream being processed by a multi-stream consumer will be processed as shown in this flowchart:
+![consumer flowchart](/doc/consumer-state-machine.svg)
 
 #### Control flow
 
@@ -216,7 +217,7 @@ Sending an unblock message to blocked consumers can be done like this:
 
 ### Recovering from failures
 
-Live consumers are responsible for finding pending message from dead consumers and claiming them so that they can be processed. This functionality is included in the `start-multi-consumer!` function, which periodically checks for such messages in addition to sending undeliverable messages to a Dead Letter Queue (DLQ).
+Live consumers are responsible for finding pending messages from dead consumers and claiming them so that they can be processed. This functionality is included in the `start-multi-consumer!` function, which periodically checks for such messages in addition to sending undeliverable messages to a Dead Letter Queue (DLQ).
 
 When a message is not acknowledged by the consumer (i.e. your consumer died halfway through,
 or the callback threw an exception) it remains pending and its idle time is how long it has been
@@ -253,7 +254,7 @@ These two possibilities are handled differently:
   - The appropriate entry in the delivery counts hash-map[^1] will
     increase on each attempt
   - When it reaches a particular value we will decide it cannot be processed and send it to a DLQ for later inspection
-  - The `:max-deliveries` key of `:claim-opts` is the number of deliveries required before the message is considered unprocessable.
+  - The `:max-deliveries` key of `:claim-opts` is the number of deliveries required before the message is considered unprocessable or 'poison'.
   - The `:dlq` option of `:claim-opts` specifies
     - The name of the `:stream` to write the message metadata to
     - Whether to `:include-message?` data inside the DLQ message.
