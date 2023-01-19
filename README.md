@@ -11,13 +11,16 @@ and gain visibility on the state of it all with a few simple functions. A single
 
 [![Clojars Project](https://img.shields.io/clojars/v/carmine-streams.svg)](https://clojars.org/carmine-streams)
 
+## Upgrade notice
+
+:fire: Version `0.2.0` was recently released with breaking API changes. Please read the [Upgrade](UPGRADE.md) guide for more information.
+
 ## Usage
 
 - [Consumer groups and consumers](#consumer-groups-and-consumers)
 - [Visibility](#visibility)
 - [Recovering from failures](#recovering-from-failures)
 - [Utilities](#utilities)
-- [Upgrading from version 0.1](#upgrading-from-version-01)
 
 ### Consumer groups and consumers
 
@@ -297,19 +300,6 @@ Get the largest id that is smaller than this one:
 ```clj
 (cs/prev-id "0-2") ;; -> 0-1
 ```
-
-### Upgrading from version 0.1
-
-In version `0.1.5` and below, the `start-consumer!` function is used
-to start an infinite loop that processes messages on a stream. In
-version `2.0.0` this was replaced with a new function
-`start-multi-consumer!`. When upgrading your code, you can replace
-calls to `start-consumer!` with
-`start-multi-consumer!`. `gc-consumer-group!` has been removed, and
-its functionality split between `start-multi-consumer!` and
-`create-consumer-group!`.
-
-Please see the documentation for those functions for available options.
 
 ## Development
 
