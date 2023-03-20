@@ -122,7 +122,10 @@
                         (car/hincrby delivery-counts
                                      delivery-counts-key
                                      1))
-              (let [v (f (kvs->map kvs))]
+              (let [v (f (with-meta (kvs->map kvs)
+                           (assoc logging-context
+                                  :id id
+                                  :stream received-stream)))]
                 (car/wcar conn-opts
                           (car/multi)
                           (car/xack received-stream group id)
