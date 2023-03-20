@@ -53,7 +53,7 @@
      (set ks))))
 
 (defn group-names [conn-opts stream]
-  (->> (car/wcar conn-opts (car/xinfo :groups stream))
+  (->> (car/wcar conn-opts (car/xinfo-groups stream))
        (map kvs->map)
        (map :name)
        set))
@@ -511,8 +511,8 @@
   [conn-opts stream group]
   (let [[groups-info consumer-info]
         (car/wcar conn-opts
-                  (car/xinfo :groups stream)
-                  (car/xinfo :consumers stream group))
+                  (car/xinfo-groups stream)
+                  (car/xinfo-consumers stream group))
         group-info (->> groups-info
                         (map kvs->map)
                         (filter #(= group (:name %)))
@@ -548,7 +548,7 @@
            (fn [stream]
              (let [exists? (try (= "OK"
                                    (car/with-replies
-                                     (car/xgroup :create stream group from-id :mkstream)))
+                                     (car/xgroup-create stream group from-id :mkstream)))
                                 (catch Throwable t
                                   (if (= :busygroup (:prefix (ex-data t)))
                                     true ;; consumer group already exists
@@ -557,7 +557,7 @@
                    {:keys [consumers]} (group-stats conn-opts stream group)]
                (doseq [consumer consumers
                        :when (>= (:idle consumer) deregister-idle)]
-                 (car/xgroup :delconsumer stream group (:name consumer))
+                 (car/xgroup-delconsumer stream group (:name consumer))
                  (log/info "Deregistered" (:name consumer) "which has been idle for" (:idle consumer) "ms"))
                exists?)))
           doall
