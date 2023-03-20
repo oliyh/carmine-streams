@@ -53,7 +53,7 @@
      (set ks))))
 
 (defn group-names [conn-opts stream]
-  (->> (car/wcar conn-opts (car/xinfo :groups stream))
+  (->> (car/wcar conn-opts (car/xinfo-groups stream))
        (map kvs->map)
        (map :name)
        set))
@@ -511,8 +511,8 @@
   [conn-opts stream group]
   (let [[groups-info consumer-info]
         (car/wcar conn-opts
-                  (car/xinfo :groups stream)
-                  (car/xinfo :consumers stream group))
+                  (car/xinfo-groups stream)
+                  (car/xinfo-consumers stream group))
         group-info (->> groups-info
                         (map kvs->map)
                         (filter #(= group (:name %)))
