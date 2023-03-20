@@ -1,8 +1,7 @@
 (ns carmine-streams.core-test
   (:require [clojure.test :refer [deftest testing is are use-fixtures]]
             [carmine-streams.core :as cs]
-            [taoensso.carmine :as car]
-            [clojure.string :as str]))
+            [taoensso.carmine :as car]))
 
 (def conn-opts {})
 
