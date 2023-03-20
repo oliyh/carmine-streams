@@ -141,8 +141,20 @@
           (car/wcar conn-opts (car/xadd stream "0-1" :temperature 19.7))
           (Thread/sleep 100)
 
-          (is (= #{{:temperature 19.7}}
-                 @consumed-messages)))
+          (let [messages @consumed-messages]
+            (is (= 1 (count messages)))
+
+            (testing "data is passed to callback"
+              (is (= {:temperature 19.7} (first messages))))
+
+            (testing "metadata is passed to callback"
+              (let [metadata (meta (first messages))]
+                (is (= {:streams ["stream/my-stream"],
+                        :group "group/my-group",
+                        :id "0-1",
+                        :stream "stream/my-stream"}
+                       (dissoc metadata :consumer)))
+                (is (re-find #"consumer/my-consumer/\d" (:consumer metadata)))))))
 
         (testing "exceptions in callback leaves message pending"
           (car/wcar conn-opts (car/xadd stream "0-2" :temperature -14.1))
@@ -159,6 +171,7 @@
         (testing "can unblock consumers"
           (cs/unblock-consumers! conn-opts (cs/consumer-name consumer-prefix))
           (is (every? #(cs/unblocked? (deref % 100 ::timed-out)) consumers)))))
+
     (testing "consumers are not deregistered when idle time is not exceeded"
       (cs/create-consumer-group! conn-opts stream group)
 
