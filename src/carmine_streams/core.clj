@@ -548,7 +548,7 @@
            (fn [stream]
              (let [exists? (try (= "OK"
                                    (car/with-replies
-                                     (car/xgroup :create stream group from-id :mkstream)))
+                                     (car/xgroup-create stream group from-id :mkstream)))
                                 (catch Throwable t
                                   (if (= :busygroup (:prefix (ex-data t)))
                                     true ;; consumer group already exists
@@ -557,7 +557,7 @@
                    {:keys [consumers]} (group-stats conn-opts stream group)]
                (doseq [consumer consumers
                        :when (>= (:idle consumer) deregister-idle)]
-                 (car/xgroup :delconsumer stream group (:name consumer))
+                 (car/xgroup-delconsumer stream group (:name consumer))
                  (log/info "Deregistered" (:name consumer) "which has been idle for" (:idle consumer) "ms"))
                exists?)))
           doall
