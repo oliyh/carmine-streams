@@ -1,4 +1,4 @@
-(defproject carmine-streams "0.2.0"
+(defproject carmine-streams "0.2.1-SNAPSHOT"
   :description "Carmine helpers for redis streams"
   :url "http://github.com/oliyh/carmine-streams"
   :license {:name "EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0"
