@@ -89,14 +89,21 @@ Start an infinite loop that consumes from the group:
                         :dlq {:stream (cs/stream-name "dlq")
                               :include-message? true}}})
 
-(future
- (cs/start-multi-consumer! conn-opts
-                           stream
-                           group
-                           consumer
-                           #(println "Yum yum, tasty message" %)
-                           opts))
+(def consumer
+  (Thread.
+   (fn []
+     (cs/start-multi-consumer! conn-opts
+                               stream
+                               group
+                               consumer
+                               #(println "Yum yum, tasty message" %)
+                               opts))))
+
+(.start consumer)
 ```
+
+N.B. carmine-streams does not have any opinion on threads, but it is recommended to avoid Clojure's `future` as it is unsuited to
+long-running tasks that do not return values (like carmine-stream's consumers).
 
 Consumer behaviour when there is only one stream is as follows:
 
@@ -127,13 +134,17 @@ A consumer can also be passed multiple streams:
 (def opts {:block 5000
            :control-fn cs/default-control-fn})
 
-(future
- (cs/start-multi-consumer! conn-opts
-                           [stream1 stream2 stream3]
-                           group
-                           consumer
-                           #(println "Yum yum, tasty message" %)
-                           opts))
+(def consumer
+  (Thread.
+   (fn []
+     (cs/start-multi-consumer! conn-opts
+                               [stream1 stream2 stream3]
+                               group
+                               consumer
+                               #(println "Yum yum, tasty message" %)
+                               opts))))
+
+(.start consumer)
 ```
 
 When passed multiple streams, the consumer will behave similarly to
@@ -169,6 +180,10 @@ but must return either `:exit` or `:recur`. See `default-control-fn` for an exam
 
 You should first interrupt the threads that your consumers are running on.
 The interrupt will be checked before each read operation and the consumer will exit gracefully.
+
+```clj
+(.interrupt consumer)
+```
 
 In addition you should send an unblock message. This will allow the consumer to stop any blocking
 read of redis it might currently be performing in order to exit.
