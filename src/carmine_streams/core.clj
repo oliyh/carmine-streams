@@ -75,9 +75,13 @@
     (do (log/error value context "Error in callback processing" id kvs)
         :recur)
 
-    (unblocked? value)
+    (and (unblocked? value) (.isInterrupted (Thread/currentThread)))
     (do (log/info context "Shutdown signal received")
         :exit)
+
+    (unblocked? value)
+    (do (log/info context "Unblocked but not interrupted, continuing")
+        :recur)
 
     (instance? Throwable value)
     (do (log/error value context "Exception during" phase ", exiting")
