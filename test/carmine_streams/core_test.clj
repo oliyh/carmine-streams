@@ -135,7 +135,7 @@
             (is (= [{:name "consumer/my-consumer/0" :pending 0}
                     {:name "consumer/my-consumer/1" :pending 0}
                     {:name "consumer/my-consumer/2" :pending 0}]
-                   (map #(dissoc % :idle) (:consumers group-stats))))))
+                   (map #(dissoc % :idle :inactive) (:consumers group-stats))))))
 
         (testing "can write to stream and messages are consumed"
           (car/wcar conn-opts (car/xadd stream "0-1" :temperature 19.7))
@@ -680,3 +680,14 @@
                  (->> (:consumers group-stats)
                       (map #(select-keys % [:name :pending]))
                       set))))))))
+
+(deftest connection-error-handling-test
+  (let [result (cs/start-multi-consumer! {:spec {:host "localhost" :port 12345}}
+                                         ["stream-name"] "group-name" "consumer-name"
+                                         (fn [v] v)
+                                         {:block 100
+                                          :claim-opts
+                                          {:min-idle-time 50}})]
+
+    (is (instance? Exception result))
+    (is (= "Carmine connection error" (ex-message result)))))

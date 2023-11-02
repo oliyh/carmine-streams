@@ -458,7 +458,7 @@
                                          (map #(or (last-ids %) ">")
                                               streams))))
                 (catch Exception e
-                  e))]
+                  [false e]))]
           (if (instance? Exception response)
             (case (control-fn :read logging-context response)
               :exit  response
